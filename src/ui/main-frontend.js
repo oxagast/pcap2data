@@ -357,6 +357,8 @@ const validKeyByLower = new Map();
 const filterKeyUsageCounts = new Map();
 const filterValueUsageCacheByKey = new Map();
 const filterValueUsageInFlightByKey = new Map();
+const LOCAL_FILTER_KEYS = ["source", "capture.sourceId", "capture.sourceSession"];
+const LOCAL_FILTER_KEY_ALIASES = new Set(LOCAL_FILTER_KEYS.map((key) => key.toLowerCase().replace(/[._\s-]+/g, "-")));
 const FILTER_AUTOCOMPLETE_MAX_SUGGESTIONS = 8;
 let filterAutocompleteCacheVersion = -1;
 if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function") {
@@ -371,6 +373,12 @@ if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function
     validKeyByLower.clear();
     validKeysCache.forEach((key) => {
       validKeyByLower.set(key.toLowerCase(), key);
+    });
+    LOCAL_FILTER_KEYS.forEach((key) => {
+      if (!validKeyByLower.has(key.toLowerCase())) {
+        validKeysCache.push(key);
+        validKeyByLower.set(key.toLowerCase(), key);
+      }
     });
     void refreshFilterAutocompleteOptions();
   });
@@ -390,7 +398,11 @@ function ensureFilterAutocompleteCachesFresh() {
 function canonicalFilterKey(filterKey) {
   const normalized = String(filterKey || "").trim().toLowerCase();
   if (!normalized) return null;
-  return validKeyByLower.get(normalized) || null;
+  return validKeyByLower.get(normalized) || (
+    LOCAL_FILTER_KEY_ALIASES.has(normalized.replace(/[._\s-]+/g, "-"))
+      ? String(filterKey).trim()
+      : null
+  );
 }
 
 function extractFilterKeysFromQuery(rawQuery) {
@@ -8587,36 +8599,45 @@ function isLocationFilterQuery(filterQuery) {
 function chooseTargetHostFromPacketMatches(matches) {
   if (!Array.isArray(matches) || matches.length === 0) return "";
 
+  const targetOptions = targetHostsDropdown.getOptions();
   const availableHosts = new Set(
-    targetHostsDropdown
-      .getOptions()
+    targetOptions
+      .filter((option) => !option.sourceId)
       .map((option) => String(option.value || "").trim())
       .filter(Boolean),
   );
-  const ipHitCounts = new Map();
+  const targetHitCounts = new Map();
 
   matches.forEach((packet) => {
-    const sourceIp = packet?.["packet.info"]?.["IP"]?.["ip.src.addr"] ?? packet?.["packet.info"]?.["IP"]?.["Source IP"];
-    const destinationIp = packet?.["packet.info"]?.["IP"]?.["ip.dst.addr"] ?? packet?.["packet.info"]?.["IP"]?.["Destination IP"];
+    const packetInfo = packet?.["packet.info"] || {};
+    const sourceId = getCaptureSourceId(packet);
+    const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"];
+    const destinationIp = packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"];
     [sourceIp, destinationIp].forEach((ipValue) => {
       if (typeof ipValue !== "string") return;
       const normalizedIp = ipValue.trim();
       if (!normalizedIp) return;
       if (!isLikelyIpAddress(normalizedIp)) return;
-      if (availableHosts.size > 0 && !availableHosts.has(normalizedIp)) return;
-      ipHitCounts.set(normalizedIp, (ipHitCounts.get(normalizedIp) || 0) + 1);
+      const sourceOption = targetOptions.find((option) =>
+        option.sourceId === sourceId && option.sourceHost === normalizedIp,
+      );
+      const targetValue = sourceOption?.value || (
+        availableHosts.has(normalizedIp) ? normalizedIp : ""
+      );
+      if (!targetValue) return;
+      targetHitCounts.set(targetValue, (targetHitCounts.get(targetValue) || 0) + 1);
     });
   });
 
-  let selectedIp = "";
+  let selectedTarget = "";
   let highestHitCount = -1;
-  ipHitCounts.forEach((hitCount, ipValue) => {
+  targetHitCounts.forEach((hitCount, targetValue) => {
     if (hitCount > highestHitCount) {
       highestHitCount = hitCount;
-      selectedIp = ipValue;
+      selectedTarget = targetValue;
     }
   });
-  return selectedIp;
+  return selectedTarget;
 }
 
 // Syncs target host from filtered packets.
@@ -8685,7 +8706,9 @@ function getAllPacketKeysForFiltering() {
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
     hostPackets.forEach((packet, packetIndex) => {
-      packetKeys.push(getPacketKey(packet, host, packetIndex));
+      if (isCaptureSourceVisible(packet)) {
+        packetKeys.push(getPacketKey(packet, host, packetIndex));
+      }
     });
   });
   return packetKeys;
@@ -8819,6 +8842,40 @@ function isBookmarkFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts?.filterKey) return false;
   return normalizeLocalFilterKey(parts.filterKey) === "bookmark";
+}
+
+function isSourceFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts?.filterKey) return false;
+  return ["source", "capture-source", "capture-source-id", "capture-source-session"]
+    .includes(normalizeLocalFilterKey(parts.filterKey));
+}
+
+function evaluateSourceFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts) return [];
+  const normalizedValue = parts.filterValue.toLowerCase();
+  const comparisonOps = [">=", "<=", ">", "<", "==", "!="];
+  const filterModifier = comparisonOps.find((modifier) => parts.filterValue.includes(modifier));
+  const filterValue = filterModifier
+    ? parts.filterValue.replace(filterModifier, "").trim().toLowerCase()
+    : normalizedValue;
+  const allPacketKeys = getAllPacketKeysForFiltering();
+  return allPacketKeys.filter((packetKey) => {
+    const packet = packetStubByKey.get(packetKey) || findPacketStubInCaptureDataByKey(packetKey);
+    const info = packet?.["packet.info"] || {};
+    const sourceValues = [info["capture.sourceId"], info["capture.sourceSession"]]
+      .filter((value) => value !== undefined && value !== null)
+      .map((value) => String(value).toLowerCase());
+    const matches = sourceValues.some((value) => {
+      if (filterValue.includes("*") || filterValue.includes("?")) {
+        const escaped = filterValue.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+        return new RegExp(`^${escaped}$`, "i").test(value);
+      }
+      return value === filterValue || value.includes(filterValue);
+    });
+    return filterModifier === "!=" ? !matches : matches;
+  });
 }
 
 // Returns whether retransmission filter expression.
@@ -9044,6 +9101,24 @@ function getPacketsForSelectedHost(selectedHost) {
   }
 
   const normalizedHost = String(selectedHost || "").trim();
+  const sourceHostOption = targetHostsDropdown
+    .getOptions()
+    .find((option) => option.value === normalizedHost && option.sourceId);
+  if (sourceHostOption) {
+    const sourceHostPackets = capturedPackets?.["host"]?.[sourceHostOption.sourceHost];
+    const visibleSourcePackets = Array.isArray(sourceHostPackets)
+      ? sourceHostPackets.filter((packet) =>
+        getCaptureSourceId(packet) === sourceHostOption.sourceId && isCaptureSourceVisible(packet),
+      )
+      : [];
+    const sortedSourcePackets = sortPacketsByOwnStreamOrder(visibleSourcePackets);
+    hostNavigationPacketsCache.set(normalizedHost, {
+      version: packetNavigationCacheVersion,
+      sourceVersion: sourceViewStateVersion,
+      packets: sortedSourcePackets,
+    });
+    return sortedSourcePackets;
+  }
   const cachedHostPackets = hostNavigationPacketsCache.get(normalizedHost);
   if (
     cachedHostPackets
@@ -9315,6 +9390,9 @@ function subtractPacketKeys(allKeys, excludedKeys) {
 async function evaluateFilterExpressionToPacketKeys(expression) {
   if (isBookmarkFilterExpression(expression)) {
     return evaluateBookmarkFilterExpression(expression);
+  }
+  if (isSourceFilterExpression(expression)) {
+    return evaluateSourceFilterExpression(expression);
   }
   if (isRetransmissionFilterExpression(expression)) {
     return evaluateRetransmissionFilterExpression(expression);
@@ -11935,11 +12013,33 @@ async function finalizeLoadedCapture(sessionState) {
   const hostNames = Object.keys(capturedPackets["host"] || {});
   for (let i = 0; i < hostNames.length; i++) {
     const host = hostNames[i];
-    hostsList.push(host);
-    targetHostOptions.push({ value: host, label: host });
     const hostPackets = Array.isArray(capturedPackets["host"][host])
       ? capturedPackets["host"][host]
       : [];
+    const sourceGroups = new Map();
+    hostPackets.forEach((packet) => {
+      const packetInfo = packet?.["packet.info"] || {};
+      const sourceId = packetInfo["capture.sourceId"] || "";
+      const sourceName = packetInfo["capture.sourceSession"] || "";
+      const sourceHost = packetInfo["capture.sourceHost"] || host;
+      const key = sourceId || "__host__";
+      if (!sourceGroups.has(key)) sourceGroups.set(key, { sourceId, sourceName, sourceHost });
+    });
+    if (sourceGroups.size === 0 || (sourceGroups.size === 1 && sourceGroups.has("__host__"))) {
+      hostsList.push(host);
+      targetHostOptions.push({ value: host, label: host });
+    } else {
+      sourceGroups.forEach(({ sourceId, sourceName, sourceHost }) => {
+        const optionValue = `${sourceId}::${host}`;
+        hostsList.push(optionValue);
+        targetHostOptions.push({
+          value: optionValue,
+          label: `${sourceName || sourceId} — ${host}`,
+          sourceId,
+          sourceHost,
+        });
+      });
+    }
     await cachePacketStubsForHost(host, hostPackets);
     isFileLoaded = true;
     // Yield between hosts so the "Finalizing..." banner can paint and
@@ -12008,7 +12108,17 @@ async function finalizeLoadedCapture(sessionState) {
 // Handles rebuild bookmark dropdown.
 function rebuildBookmarkDropdown() {
   bookmarkDropdown.render(
-    bookmarkList.map((bookmarkKey) => ({ value: bookmarkKey, label: bookmarkKey })),
+    bookmarkList.map((bookmarkKey) => {
+      const packet = findPacketStubInCaptureDataByKey(bookmarkKey);
+      const packetInfo = packet?.["packet.info"] || {};
+      const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "Unknown";
+      const sourceName = packetInfo?.["capture.sourceSession"] || packetInfo?.["capture.sourceId"] || "Current capture";
+      const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? packetInfo?.["packet.processed"] ?? "?";
+      return {
+        value: bookmarkKey,
+        label: `${sourceName} — ${sourceIp} [${packetIndex}]`,
+      };
+    }),
     "",
   );
 }
@@ -12897,11 +13007,38 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
 
   if (hostSetChanged) {
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
+    const sourceHostOptions = [];
+    nextHosts.forEach((host) => {
+      const packets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+      const sourceGroups = new Map();
+      packets.forEach((packet) => {
+        const info = packet?.["packet.info"] || {};
+        const sourceId = typeof info["capture.sourceId"] === "string" ? info["capture.sourceId"] : "";
+        const sourceName = typeof info["capture.sourceSession"] === "string" ? info["capture.sourceSession"] : "";
+        const sourceHost = typeof info["capture.sourceHost"] === "string" && info["capture.sourceHost"]
+          ? info["capture.sourceHost"]
+          : host;
+        const key = sourceId || "__host__";
+        if (!sourceGroups.has(key)) sourceGroups.set(key, { sourceId, sourceName, sourceHost });
+      });
+      if (sourceGroups.size <= 1 && sourceGroups.has("__host__")) {
+        sourceHostOptions.push({ value: host, label: host });
+      } else {
+        sourceGroups.forEach(({ sourceId, sourceName, sourceHost }) => {
+          sourceHostOptions.push({
+            value: `${sourceId}::${host}`,
+            label: `${sourceName || sourceId} — ${host}`,
+            sourceId,
+            sourceHost,
+          });
+        });
+      }
+    });
     targetHostsDropdown.render(
       [
         { value: DUMMY_ALL_HOST, label: DUMMY_ALL_HOST },
         { value: DUMMY_BOOKMARKED_HOST, label: DUMMY_BOOKMARKED_HOST },
-        ...nextHosts.map((host) => ({ value: host, label: host })),
+        ...sourceHostOptions,
       ],
       previousHost,
     );
@@ -13153,6 +13290,17 @@ function statusUpdate(message) {
 function buildHostTargetFilterQuery(selectedHost) {
   if (isAllHostsSelection(selectedHost)) return "";
   if (isBookmarkedSelection(selectedHost)) return BOOKMARK_FILTER_QUERY;
+  const hostOption = targetHostsDropdown
+    .getOptions()
+    .find((option) => option.value === selectedHost);
+  if (hostOption?.sourceId) {
+    const sourceFilter = sanitizeFilterTerm(hostOption.sourceId);
+    const hostFilter = sanitizeFilterTerm(hostOption.sourceHost || "");
+    if (sourceFilter && hostFilter) {
+      return `source: ${sourceFilter} && (ip.src.addr: ${hostFilter} || ip.dst.addr: ${hostFilter})`;
+    }
+    return sourceFilter ? `source: ${sourceFilter}` : "";
+  }
   const safeHost = sanitizeFilterTerm(selectedHost);
   if (!safeHost) return "";
   return `ip.src.addr: ${safeHost} || ip.dst.addr: ${safeHost}`;
@@ -28089,24 +28237,30 @@ convertContextButtons.llmSubnetHostSummary.addEventListener("click", () => {
 
 // Handle bookmark selection from dropdown
 function handleBookmarkSelection(selectedBookmarkKey) {
-  const { host: bookmarkHost, packetIndex: bookmarkPacketIndex } = parsePacketKey(selectedBookmarkKey);
-  if (!Number.isInteger(bookmarkPacketIndex) || bookmarkPacketIndex < 0) {
+  const packet = packetStubByKey.get(selectedBookmarkKey) || findPacketStubInCaptureDataByKey(selectedBookmarkKey);
+  if (!packet) {
     statusUpdate("Invalid bookmark selection, missing host or packet index");
     doError("Invalid bookmark selection, missing host or packet index!");
     return;
   }
-  index = bookmarkPacketIndex;
-  setActivePacketCursor(index);
-  p = capturedPackets["host"][bookmarkHost];
-  activeBookmark["host"] = bookmarkHost;
-  activeBookmark["Packet"] = index;
-  hostFilterEl.value = bookmarkHost;
-  if (bookmarkHost == undefined || index == undefined) {
-    statusUpdate("Invalid bookmark selection, missing host or packet index");
-    doError("Invalid bookmark selection, missing host or packet index!");
-  } else {
-    targetHostsDropdown.setValue(bookmarkHost);
+  const packetInfo = packet["packet.info"] || {};
+  const bookmarkHost = packet.__host || packetInfo["capture.sourceHost"] ||
+    Object.keys(capturedPackets?.host || {}).find((host) => capturedPackets.host[host]?.includes(packet)) || "";
+  const hostPackets = bookmarkHost && Array.isArray(capturedPackets?.host?.[bookmarkHost])
+    ? capturedPackets.host[bookmarkHost].filter((entry) => isCaptureSourceVisible(entry))
+    : [];
+  const packetPosition = hostPackets.findIndex((entry) => getPacketKey(entry, bookmarkHost, 0) === selectedBookmarkKey);
+  if (packetPosition < 0) {
+    statusUpdate("Bookmark is not available in the current source view");
+    return;
   }
+  p = hostPackets;
+  index = packetPosition;
+  setActivePacketCursor(index);
+  activeBookmark["host"] = bookmarkHost;
+  activeBookmark["Packet"] = index + 1;
+  hostFilterEl.value = bookmarkHost;
+  targetHostsDropdown.setValue(bookmarkHost);
   void handlePacketNavigation("bookmark", activeBookmark);
 }
 
@@ -28404,7 +28558,11 @@ async function handlePacketNavigation(navAction, navBookmark) {
       return;
     }
     currentIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || hostFilterEl.value || "Unknown";
-    currentPacketKey = `${currentIp}${PACKET_KEY_SEPARATOR}${packetInfo?.["index"] ?? packetInfo?.["Index"] ?? index}`;
+    currentPacketKey = getPacketKey(
+      activePacket,
+      hostFilterEl.value,
+      index,
+    );
     syncBookmarkDropdown(currentPacketKey);
     updateCurrentPacketCounters(packetSet, {
       isFilteredView: navAction === "filtered",

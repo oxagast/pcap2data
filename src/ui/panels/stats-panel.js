@@ -4804,7 +4804,7 @@ function createStatsPanel(options) {
           table.className = "stats-comparison-table";
           const thead = documentRef.createElement("thead");
           const headerRow = documentRef.createElement("tr");
-          ["Metric", comparisonStats.leftLabel, comparisonStats.rightLabel, "Difference"].forEach((label) => {
+          ["Metric", comparisonStats.leftLabel, comparisonStats.rightLabel, "Δ Differences"].forEach((label) => {
             const th = documentRef.createElement("th");
             th.textContent = label;
             headerRow.appendChild(th);
@@ -4818,7 +4818,7 @@ function createStatsPanel(options) {
               entry.label,
               String(entry.left),
               String(entry.right),
-              `${entry.delta >= 0 ? "+" : ""}${entry.delta}`,
+              `Δ ${entry.delta >= 0 ? "+" : ""}${entry.delta}`,
             ].forEach((value) => {
               const cell = documentRef.createElement("td");
               cell.textContent = value;
