@@ -6,6 +6,24 @@ const LIST_COLUMN_MIN_WIDTH = 48;
 const LIST_COLUMN_MAX_WIDTH = 640;
 const PACKET_KEY_SEPARATOR = "$";
 
+function parseListTimestampMs(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const match = value.trim().match(
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:\s*(Z|[+-]\d{2}:?\d{2}))?$/,
+  );
+  if (match) {
+    const [, year, month, day, hour, minute, second, fraction = "", zone] = match;
+    const base = zone
+      ? Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}${zone === "Z" ? "Z" : zone}`)
+      : new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), 0).getTime();
+    if (Number.isFinite(base)) {
+            return base + Number(`0.${fraction.slice(0, 6).padEnd(6, "0")}`) * 1000;
+    }
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function buildPacketKey(sourceIp, packetIndex) {
   return `${String(sourceIp ?? "")}${PACKET_KEY_SEPARATOR}${String(packetIndex ?? "")}`;
 }
@@ -368,6 +386,10 @@ function createListPanel({
   setCurrentIp,
   setCurrentPacketKey,
   getCurrentPacketKey,
+  isCaptureSourceVisible,
+  getSourceState,
+  getSourceColor,
+  hasHiddenCaptureSources,
   syncBookmarkDropdown,
   setActivePacketCursor,
   showAllData,
@@ -520,6 +542,7 @@ function createListPanel({
     tr.dataset.pktIdx = row.pktIdx;
     tr.dataset.stream = row.streamLabel;
     tr.dataset.packetKey = row.packetKey;
+    if (row.sourceId) tr.dataset.sourceId = row.sourceId;
 
     if (row.packetKey === getCurrentPacketKey()) {
       tr.classList.add("packet-list-selected");
@@ -535,7 +558,11 @@ function createListPanel({
 
     columns.forEach((column) => {
       const td = document.createElement("td");
-      td.textContent = String(column.getValue(row) ?? "");
+      if (typeof column.renderCell === "function") {
+        column.renderCell(row, td);
+      } else {
+        td.textContent = String(column.getValue(row) ?? "");
+      }
       if (column.widthPx) {
         const columnWidth = `${column.widthPx}px`;
         td.style.width = columnWidth;
@@ -767,6 +794,10 @@ function createListPanel({
       packetKey: normalizePacketKey(row?.packetKey || ""),
       pktIdx: Number.isFinite(Number(row?.pktIdx)) ? Number(row.pktIdx) : 0,
       pcapOrder: Number.isFinite(Number(row?.pcapOrder)) ? Number(row.pcapOrder) : 0,
+      timestamp: typeof row?.timestamp === "string" ? row.timestamp : "",
+      timestampMs: Number.isFinite(Number(row?.timestampMs))
+        ? Number(row.timestampMs)
+        : parseListTimestampMs(row?.timestamp),
       isBookmarked: bookmarkSet.has(normalizePacketKey(row?.packetKey || "")),
       streamLabel:
         typeof row?.streamLabel === "string" && row.streamLabel.trim()
@@ -775,9 +806,10 @@ function createListPanel({
             ? `S${Number(row.streamOrder)}`
             : "",
     }));
-
-    virtualListState.rows = normalizedRows;
-    virtualListState.totalCount = Number(response.totalCount) || totalCount;
+    virtualListState.rows = normalizedRows.filter((row) =>
+      typeof isCaptureSourceVisible !== "function" || !row.sourceId || isCaptureSourceVisible({ "packet.info": { "capture.sourceId": row.sourceId } }),
+    );
+    virtualListState.totalCount = virtualListState.rows.length;
     virtualListState.windowStart = Number(response.startIndex) || 0;
     virtualListState.windowEnd =
       virtualListState.windowStart + virtualListState.rows.length;
@@ -815,6 +847,7 @@ function createListPanel({
     const columnDefinitions = [
       { label: "#", key: "idx", defaultVisible: false, defaultWidth: 64, getValue: (row) => row.idx },
       { label: "PCAP #", key: "pcapOrder", defaultWidth: 82, getValue: (row) => row.pcapOrder },
+      { label: "Timestamp", key: "timestamp", defaultWidth: 180, getValue: (row) => row.timestamp },
       { label: "★", key: "isBookmarked", defaultWidth: 46, getValue: (row) => row.isBookmarked ? "★" : "" },
       { label: "Stream", key: "streamOrder", defaultWidth: 78, getValue: (row) => row.streamLabel },
       { label: "Host", key: "host", defaultVisible: false, defaultWidth: 180, getValue: (row) => row.host },
@@ -824,6 +857,38 @@ function createListPanel({
       { label: "Dst Port", key: "dstPort", defaultWidth: 96, getValue: (row) => row.dstPort },
       { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
       { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => normalizeAppProtocolForDisplay(row.appProto) },
+      {
+        label: "Source Color",
+        key: "sourceColor",
+        defaultVisible: true,
+        defaultWidth: 38,
+        getValue: () => "",
+        renderCell: (row, cell) => {
+          const sourceState = typeof getSourceState === "function"
+            ? getSourceState()[row.sourceId]
+            : null;
+          const configuredColor = typeof getSourceColor === "function"
+            ? getSourceColor(row.sourceId)
+            : sourceState?.color || "";
+          cell.classList.add("packet-list-source-color-cell");
+          if (configuredColor && /^#[0-9a-f]{6}$/i.test(configuredColor)) {
+            cell.style.setProperty("background-color", configuredColor, "important");
+            const swatch = document.createElement("canvas");
+            swatch.className = "packet-list-source-color-swatch";
+            swatch.width = 20;
+            swatch.height = 20;
+            const context = swatch.getContext("2d");
+            if (context) {
+              context.fillStyle = configuredColor;
+              context.fillRect(0, 0, swatch.width, swatch.height);
+            }
+            swatch.title = row.sourceName || row.sourceId || "Capture source";
+            swatch.setAttribute("aria-label", swatch.title);
+            cell.appendChild(swatch);
+          }
+        },
+      },
+      { label: "Source", key: "sourceName", defaultVisible: true, defaultWidth: 150, getValue: (row) => row.sourceName || "" },
       { label: "Payload Len", key: "payloadLength", defaultVisible: false, defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];
     const sortState = { key: "pcapOrder", direction: "asc" };
@@ -984,6 +1049,7 @@ function createListPanel({
           window.captureapi?.getListWindow &&
           !lc &&
           !activeGroupByStream &&
+          !(typeof hasHiddenCaptureSources === "function" && hasHiddenCaptureSources()) &&
           sortState.key === "pcapOrder" &&
           sortState.direction === "asc",
         );
@@ -1178,6 +1244,18 @@ function createListPanel({
           const idx = pi["index"] ?? pi["Index"] ?? pktIdx + 1;
           const pcapOrderRaw = Number(pi["packet.processed"]);
           const pcapOrder = Number.isFinite(pcapOrderRaw) ? pcapOrderRaw + 1 : idx;
+          const timestamp = typeof pi["packet.timestamp"] === "string"
+            ? pi["packet.timestamp"]
+            : typeof pi["Packet Timestamp"] === "string"
+              ? pi["Packet Timestamp"]
+              : "";
+          const adjustedTimestampMs = Number(pi["capture.adjustedTimestampMs"]);
+          const parsedTimestampMs = parseListTimestampMs(timestamp);
+          const timestampMs = Number.isFinite(adjustedTimestampMs)
+            ? adjustedTimestampMs
+            : Number.isFinite(parsedTimestampMs)
+              ? parsedTimestampMs
+              : null;
           const srcIp = pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"] ?? "";
           const dstIp = pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"] ?? "";
           const transport = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
@@ -1196,12 +1274,16 @@ function createListPanel({
             "";
           const appProto = inferApplicationProtocol(pi, ei);
           const payloadLength = getPacketPayloadLength(pi);
-          const packetKey = buildPacketKey(
-            srcIp,
-            pi["index"] ?? pi["Index"] ?? pktIdx + 1,
+          const packetKey = normalizePacketKey(
+            pkt?.__packetKey ||
+            pi["capture.packetId"] ||
+            buildPacketKey(srcIp, pi["index"] ?? pi["Index"] ?? pktIdx + 1),
           );
           const isBookmarked = getBookmarkList().includes(packetKey);
           const streamKey = getStreamKey(pi);
+          const sourceId = typeof pi["capture.sourceId"] === "string" ? pi["capture.sourceId"] : "";
+          const sourceName = typeof pi["capture.sourceSession"] === "string" ? pi["capture.sourceSession"] : "";
+          if (typeof isCaptureSourceVisible === "function" && !isCaptureSourceVisible(pkt)) return;
 
           if (lc) {
             const rowText = [
@@ -1223,6 +1305,8 @@ function createListPanel({
           rows.push({
             idx,
             pcapOrder,
+            timestamp,
+            timestampMs,
             host,
             srcIp,
             dstIp,
@@ -1235,6 +1319,8 @@ function createListPanel({
             streamKey,
             isBookmarked,
             packetKey,
+            sourceId,
+            sourceName,
           });
         });
       }
@@ -1265,6 +1351,7 @@ function createListPanel({
         switch (columnKey) {
           case "idx":
           case "pcapOrder":
+          case "timestampMs":
           case "streamOrder":
           case "payloadLength":
             return Number(left[columnKey]) - Number(right[columnKey]);
@@ -1273,6 +1360,22 @@ function createListPanel({
           case "srcPort":
           case "dstPort":
             return comparePortValue(left[columnKey], right[columnKey]);
+          case "timestamp": {
+            const leftTimestamp = Number.isFinite(Number(left.timestampMs))
+              ? Number(left.timestampMs)
+              : parseListTimestampMs(String(left.timestamp || ""));
+            const rightTimestamp = Number.isFinite(Number(right.timestampMs))
+              ? Number(right.timestampMs)
+              : parseListTimestampMs(String(right.timestamp || ""));
+            const leftValid = Number.isFinite(leftTimestamp);
+            const rightValid = Number.isFinite(rightTimestamp);
+            if (leftValid && rightValid && leftTimestamp !== rightTimestamp) {
+              return leftTimestamp - rightTimestamp;
+            }
+            if (leftValid && !rightValid) return -1;
+            if (!leftValid && rightValid) return 1;
+            return compareText(left.timestamp, right.timestamp);
+          }
           default:
             return compareText(left[columnKey], right[columnKey]);
         }

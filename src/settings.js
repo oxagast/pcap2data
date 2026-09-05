@@ -93,6 +93,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         columnWidths: {},
         columnOrder: [],
     },
+    merge: {
+        sourceColorCodingEnabled: true,
+        sourceColors: ["#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#bdb2ff", "#ffc6ff"],
+    },
     llm: {
         // Provider selection: "ollama" or "openrouter"
         provider: "ollama",
@@ -267,6 +271,7 @@ function normalizeSettings(rawSettings = {}) {
     const backend = source.backend && typeof source.backend === "object" ? source.backend : {};
     const debug = source.debug && typeof source.debug === "object" ? source.debug : {};
     const list = source.list && typeof source.list === "object" ? source.list : {};
+    const merge = source.merge && typeof source.merge === "object" ? source.merge : {};
     const llm = source.llm && typeof source.llm === "object" ? source.llm : {};
     const apiKeys = source.apiKeys && typeof source.apiKeys === "object" ? source.apiKeys : {};
     const plugins = source.plugins && typeof source.plugins === "object" ? source.plugins : {};
@@ -276,6 +281,7 @@ function normalizeSettings(rawSettings = {}) {
     const backendDefaults = DEFAULT_SETTINGS.backend;
     const debugDefaults = DEFAULT_SETTINGS.debug;
     const listDefaults = DEFAULT_SETTINGS.list;
+    const mergeDefaults = DEFAULT_SETTINGS.merge;
     const defaults = DEFAULT_SETTINGS.llm;
     const apiKeysDefaults = DEFAULT_SETTINGS.apiKeys;
     const pluginDefaults = DEFAULT_SETTINGS.plugins;
@@ -443,6 +449,14 @@ function normalizeSettings(rawSettings = {}) {
                 640,
             ),
             columnOrder: normalizeStringArray(list.columnOrder || listDefaults.columnOrder),
+        },
+        merge: {
+            sourceColorCodingEnabled: typeof merge.sourceColorCodingEnabled === "boolean"
+                ? merge.sourceColorCodingEnabled
+                : mergeDefaults.sourceColorCodingEnabled,
+            sourceColors: Array.isArray(merge.sourceColors)
+                ? merge.sourceColors.filter((color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 12)
+                : [...mergeDefaults.sourceColors],
         },
         llm: {
             // Provider selection: "ollama" or "openrouter"
