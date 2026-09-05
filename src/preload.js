@@ -1278,6 +1278,8 @@ contextBridge.exposeInMainWorld('captureapi', {
   getPacketStub: (packetKey) => ipcRenderer.invoke('capture-store-get-packet-stub', packetKey),
   getListWindow: (request) => ipcRenderer.invoke('capture-store-get-list-window', request),
   exportSessionData: () => ipcRenderer.invoke('capture-store-export-session-data'),
+  getSourcePaths: () => ipcRenderer.invoke('capture-store-get-source-paths'),
+  exportFilteredPcap: (options) => ipcRenderer.invoke('capture-store-export-filtered-pcap', options),
   filter: (query) => ipcRenderer.invoke('capture-store-filter', query),
 });
 
@@ -1352,6 +1354,7 @@ contextBridge.exposeInMainWorld('fsize', {
 });
 
 contextBridge.exposeInMainWorld('saveapi', {
+  choosePcapPath: () => ipcRenderer.invoke('choose-pcap-path'),
   saveJson: (jsonData) => ipcRenderer.invoke('save-json', jsonData),
   savePacket: (packetData) => ipcRenderer.invoke('save-packet', packetData),
   savePayload: (payloadHex, options) =>

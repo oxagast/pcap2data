@@ -6816,6 +6816,17 @@ ipcMain.handle("save-json", async (_event, jsonData) => {
   }
 });
 
+ipcMain.handle("choose-pcap-path", async () => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: "Export PCAP",
+    defaultPath: path.join(app.getPath("documents"), "capture.pcap"),
+    filters: [{ name: "PCAP Files", extensions: ["pcap", "pcapng"] }],
+  });
+  return canceled || !filePath
+    ? { success: false, canceled: true }
+    : { success: true, filePath };
+});
+
 
 ipcMain.handle("current-packet-json", async (_event, packetData) => {
   // we need to use main-frontend.js's getCurrentPacketForExport() function

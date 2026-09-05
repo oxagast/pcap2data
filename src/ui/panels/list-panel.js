@@ -851,33 +851,10 @@ function createListPanel({
     const columnsMenuEl = document.getElementById("list-columns-menu");
     const columnsControlEl = document.getElementById("list-columns-control");
     const columnDefinitions = [
-      { label: "#", key: "idx", defaultVisible: false, defaultWidth: 64, getValue: (row) => row.idx },
-      { label: "PCAP #", key: "pcapOrder", defaultWidth: 82, getValue: (row) => row.pcapOrder },
-      { label: "Timestamp", key: "timestamp", defaultWidth: 180, getValue: (row) => row.timestamp },
-      { label: "★", key: "isBookmarked", defaultWidth: 46, getValue: (row) => row.isBookmarked ? "★" : "" },
-      { label: "Stream", key: "streamOrder", defaultWidth: 78, getValue: (row) => row.streamLabel },
-      { label: "Host", key: "host", defaultVisible: false, defaultWidth: 180, getValue: (row) => row.host },
-      { label: "Src IP", key: "srcIp", defaultWidth: 150, getValue: (row) => row.srcIp },
-      { label: "Dst IP", key: "dstIp", defaultWidth: 150, getValue: (row) => row.dstIp },
-      { label: "Src Port", key: "srcPort", defaultWidth: 96, getValue: (row) => row.srcPort },
-      { label: "Dst Port", key: "dstPort", defaultWidth: 96, getValue: (row) => row.dstPort },
-      { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
-      { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => normalizeAppProtocolForDisplay(row.appProto) },
-      {
-        label: "Verified",
-        key: "verified",
-        defaultVisible: false,
-        defaultWidth: 100,
-        getValue: (row) => {
-          const helper = getMachineCorrelation?.();
-          const count = helper?.getVerifiedCount?.(row.sourceHost || row.host, row.packet, row.pktIdx);
-          return count ? `${count} pcaps` : "—";
-        },
-      },
       {
         label: "Source Color",
         key: "sourceColor",
-        defaultVisible: true,
+        defaultVisible: false,
         defaultWidth: 38,
         getValue: () => "",
         renderCell: (row, cell) => {
@@ -909,9 +886,32 @@ function createListPanel({
       {
         label: "Source",
         key: "sourceName",
-        defaultVisible: true,
+        defaultVisible: false,
         defaultWidth: 150,
         getValue: (row) => (row.sourceNames || [row.sourceName]).filter(Boolean).join(", "),
+      },
+      { label: "#", key: "idx", defaultVisible: false, defaultWidth: 64, getValue: (row) => row.idx },
+      { label: "PCAP #", key: "pcapOrder", defaultWidth: 82, getValue: (row) => row.pcapOrder },
+      { label: "Timestamp", key: "timestamp", defaultWidth: 180, getValue: (row) => row.timestamp },
+      { label: "★", key: "isBookmarked", defaultWidth: 46, getValue: (row) => row.isBookmarked ? "★" : "" },
+      { label: "Stream", key: "streamOrder", defaultWidth: 78, getValue: (row) => row.streamLabel },
+      { label: "Host", key: "host", defaultVisible: false, defaultWidth: 180, getValue: (row) => row.host },
+      { label: "Src IP", key: "srcIp", defaultWidth: 150, getValue: (row) => row.srcIp },
+      { label: "Dst IP", key: "dstIp", defaultWidth: 150, getValue: (row) => row.dstIp },
+      { label: "Src Port", key: "srcPort", defaultWidth: 96, getValue: (row) => row.srcPort },
+      { label: "Dst Port", key: "dstPort", defaultWidth: 96, getValue: (row) => row.dstPort },
+      { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
+      { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => normalizeAppProtocolForDisplay(row.appProto) },
+      {
+        label: "Verified",
+        key: "verified",
+        defaultVisible: false,
+        defaultWidth: 100,
+        getValue: (row) => {
+          const helper = getMachineCorrelation?.();
+          const count = helper?.getVerifiedCount?.(row.sourceHost || row.host, row.packet, row.pktIdx);
+          return count ? `${count} pcaps` : "—";
+        },
       },
       { label: "Payload Len", key: "payloadLength", defaultVisible: false, defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];

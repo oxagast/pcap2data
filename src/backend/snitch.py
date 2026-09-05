@@ -33,6 +33,7 @@ import warnings
 import argparse
 import base64
 import csv
+import hashlib
 import json
 import os
 import queue
@@ -5540,6 +5541,134 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+
+        if self.path == "/pcap/write":
+            try:
+                request = self.parseJsonBody()
+            except Exception as error:
+                self.sendJson(400, {"success": False, "error": f"Invalid JSON body: {error}"})
+                return
+            if not isinstance(request, dict):
+                self.sendJson(400, {"success": False, "error": "Invalid JSON body"})
+                return
+
+            outputPath = str(request.get("outputPcap") or "").strip()
+            filterExpression = str(request.get("filter") or "").strip()
+            sourceRequests = request.get("sources")
+            if not outputPath:
+                self.sendJson(400, {"success": False, "error": "outputPcap is required"})
+                return
+            if not isinstance(sourceRequests, list) or not sourceRequests:
+                self.sendJson(400, {"success": False, "error": "sources must be a non-empty array"})
+                return
+
+            try:
+                entries = []
+                skippedSources = []
+                for sourceIndex, sourceRequest in enumerate(sourceRequests):
+                    if not isinstance(sourceRequest, dict):
+                        skippedSources.append({"index": sourceIndex, "reason": "invalid source"})
+                        continue
+                    inputPath = str(sourceRequest.get("inputPcap") or "").strip()
+                    sourceId = str(sourceRequest.get("sourceId") or f"source-{sourceIndex + 1}").strip()
+                    try:
+                        ordinal = int(sourceRequest.get("ordinal", sourceIndex))
+                    except (TypeError, ValueError):
+                        ordinal = sourceIndex
+                    selectedPacketIndexes = sourceRequest.get("packetIndexes")
+                    if isinstance(selectedPacketIndexes, list):
+                        selectedPacketIndexes = {
+                            int(index)
+                            for index in selectedPacketIndexes
+                            if isinstance(index, (int, float)) and int(index) >= 0
+                        }
+                    else:
+                        selectedPacketIndexes = None
+                    if not inputPath or not os.path.isfile(inputPath):
+                        skippedSources.append({
+                            "sourceId": sourceId,
+                            "reason": "input pcap not found",
+                        })
+                        continue
+
+                    packets = scapy.rdpcap(inputPath)
+                    if filterExpression and not isinstance(selectedPacketIndexes, set):
+                        # Apply the same display-filter expression to every source.
+                        # The JSON/session filter language is not a libpcap BPF
+                        # language, so use the backend's decoded packet fields.
+                        # A pcap export with a non-empty filter is intentionally
+                        # handled separately from the no-filter full export path.
+                        try:
+                            packets = scapy.sniff(offline=inputPath, filter=filterExpression)
+                        except Exception:
+                            raise ValueError(
+                                "PCAP export filters must be valid libpcap expressions "
+                                "when exporting directly from source pcaps"
+                            )
+
+                    for packetIndex, packet in enumerate(packets):
+                        if selectedPacketIndexes is not None and packetIndex not in selectedPacketIndexes:
+                            continue
+                        packetBytes = bytes(packet)
+                        digest = hashlib.sha256(packetBytes).hexdigest()[:24]
+                        timestamp = float(getattr(packet, "time", 0) or 0)
+                        entries.append({
+                            "packet": packet,
+                            "sourceId": sourceId,
+                            "ordinal": ordinal,
+                            "packetIndex": packetIndex,
+                            "digest": digest,
+                            "timestamp": timestamp,
+                        })
+
+                # A single source is preserved packet-for-packet. For merged
+                # sources, collapse byte-identical frames while retaining the
+                # first source/order occurrence. This is deliberately not TCP
+                # retransmission detection: identical frames from independently
+                # captured source pcaps are the false duplicates being removed.
+                isMultiSource = len(sourceRequests) > 1
+                totalEntryCount = len(entries)
+                if isMultiSource:
+                    entries.sort(key=lambda entry: (
+                        entry["timestamp"],
+                        entry["ordinal"],
+                        entry["packetIndex"],
+                        entry["digest"],
+                    ))
+                    digestSources = {}
+                    collapsedEntries = []
+                    for entry in entries:
+                        sourceIds = digestSources.setdefault(entry["digest"], set())
+                        if sourceIds and entry["sourceId"] not in sourceIds:
+                            continue
+                        sourceIds.add(entry["sourceId"])
+                        collapsedEntries.append(entry)
+                    entries = collapsedEntries
+
+                packetsToWrite = [entry["packet"] for entry in entries]
+                if not packetsToWrite and skippedSources and not totalEntryCount:
+                    self.sendJson(400, {
+                        "success": False,
+                        "error": "No readable packets were found in the supplied pcap sources",
+                        "skippedSources": skippedSources,
+                    })
+                    return
+                scapy.wrpcap(outputPath, packetsToWrite)
+                self.sendJson(200, {
+                    "success": True,
+                    "outputPcap": outputPath,
+                    "packetCount": len(packetsToWrite),
+                    "totalCount": totalEntryCount,
+                    "collapsedCount": totalEntryCount - len(packetsToWrite),
+                    "skippedSources": skippedSources,
+                })
+            except Exception as error:
+                self.sendJson(500, {
+                    "success": False,
+                    "error": str(error),
+                    "traceback": traceback.format_exc(),
+                })
+            return
 
         if self.path != "/process":
             self.sendJson(

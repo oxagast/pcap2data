@@ -3189,6 +3189,7 @@ module.exports = {
   requestBackendStopProcessing,
   requestBackendShutdown,
   getBackendServiceDiagnostics,
+  getBackendHttpPort: () => currentBackendHttpPort,
   requestSnitchHttpBackendGeoip,
   requestSnitchHttpBackendWhois,
   requestSnitchHttpBackendIpsum,
