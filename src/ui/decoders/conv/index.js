@@ -43,12 +43,15 @@ const { decodeBsonFromBytes } = require("./bson");
 const { decodeLdapFromBytes } = require("./ldap");
 const { decodeSmbFromBytes } = require("./smb");
 const { decodeEpmapFromBytes } = require("./epmap");
+const { decodeSsdpFromBytes } = require("./ssdp");
+const { decodeGrpcFromBytes } = require("./grpc");
 const { decodeSipFromBytes } = require("./sip");
 const { decodeSmppFromBytes } = require("./smpp");
 const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
 const { decodeKerberosFromBytes } = require("./kerberos");
 const { decodeDnsFromBytes } = require("./dns");
+const { decodeMdnsFromBytes } = require("./mdns");
 const { decodeLlmnrFromBytes } = require("./llmnr");
 const { decodeNbnsFromBytes } = require("./nbns");
 const { decodeNbdgmFromBytes } = require("./nbdgm");
@@ -166,12 +169,15 @@ module.exports = {
     decodeLdapFromBytes,
     decodeSmbFromBytes,
     decodeEpmapFromBytes,
+    decodeSsdpFromBytes,
+    decodeGrpcFromBytes,
     decodeSipFromBytes,
     decodeSmppFromBytes,
     decodeSoulseekFromBytes,
     decodeBittorrentFromBytes,
     decodeKerberosFromBytes,
     decodeDnsFromBytes,
+    decodeMdnsFromBytes,
     decodeLlmnrFromBytes,
     decodeNbnsFromBytes,
     decodeNbdgmFromBytes,

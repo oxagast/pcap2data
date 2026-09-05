@@ -3840,6 +3840,24 @@ strong {
   color: var(--color-5);
 }
 
+.data-tools-proto-plaintext {
+  max-height: 400px;
+  overflow: auto;
+  border: 1px solid var(--color-3);
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.data-tools-proto-plaintext pre {
+  margin: 0;
+  white-space: pre;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  color: var(--color-5);
+  line-height: 1.5;
+}
+
 .data-tools-proto-hide-noop-label {
   display: flex;
   align-items: center;

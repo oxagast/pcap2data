@@ -252,7 +252,10 @@ import decoders.bgp as dec_bgp
 import decoders.cdp as dec_cdp
 import decoders.mndp as dec_mndp
 import decoders.dhcp as dec_dhcp
+import decoders.dhcpv6 as dec_dhcpv6
+import decoders.epmap as dec_epmap
 import decoders.ftp as dec_ftp
+import decoders.grpc as dec_grpc
 import decoders.http as dec_http
 import decoders.http2 as dec_http2
 import decoders.hsrp as dec_hsrp
@@ -264,6 +267,8 @@ import decoders.kerberos as dec_kerberos
 import decoders.dnp3 as dec_dnp3
 import decoders.lacp as dec_lacp
 import decoders.ldap as dec_ldap
+import decoders.llmnr as dec_llmnr
+import decoders.mdns as dec_mdns
 import decoders.modbus as dec_modbus
 import decoders.mqtt as dec_mqtt
 import decoders.mtp as dec_mtp
@@ -280,6 +285,7 @@ import decoders.s7comm as dec_s7comm
 import decoders.sctp as dec_sctp
 import decoders.sip as dec_sip
 import decoders.smb as dec_smb
+import decoders.ssdp as dec_ssdp
 import decoders.smpp as dec_smpp
 import decoders.smtp as dec_smtp
 import decoders.snmp as dec_snmp
@@ -3802,6 +3808,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 httpSection = dec_http.decodeHTTP(rawPayload)
                 if httpSection is not None:
                     transportSection["HTTP"] = httpSection
+                    contentType = httpSection.get("Content-Type", "")
+                    if "application/grpc" in str(contentType).lower():
+                        grpcSection = dec_grpc.decodeGRPC(rawPayload, contentType)
+                        if grpcSection is not None:
+                            transportSection["gRPC"] = grpcSection
                 # Decode HTTP/2 only for streams that have presented the client
                 # connection preface. This avoids classifying unrelated encrypted
                 # payloads (including SSH) as HTTP/2 based on random bytes.
@@ -3818,6 +3829,14 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     http2Section = dec_http2.decodeHTTP2(rawPayload)
                     if http2Section is not None:
                         transportSection["HTTP2"] = http2Section
+                # Decode gRPC envelopes carried inside HTTP/2 DATA frames on
+                # the conventional TCP/50051 service port.
+                if streamLabelPort == 50051 or srcPort == 50051 or dstPort == 50051:
+                    grpcSection = dec_grpc.decodeGRPCFromHTTP2(rawPayload)
+                    if grpcSection is None:
+                        grpcSection = dec_grpc.decodeGRPC(rawPayload)
+                    if grpcSection is not None:
+                        transportSection["gRPC"] = grpcSection
                 # Decode FTP on TCP ports 20/21
                 if streamLabelPort in (20, 21) or srcPort in (20, 21):
                     ftpSection = dec_ftp.decodeFTP(rawPayload)
@@ -3995,6 +4014,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     s7commSection = dec_s7comm.decodeS7comm(rawPayload)
                     if s7commSection is not None:
                         transportSection["S7comm"] = s7commSection
+                # Decode EPMAP (Microsoft RPC Endpoint Mapper) on TCP/135.
+                if streamLabelPort == 135 or srcPort == 135 or dstPort == 135:
+                    epmapSection = dec_epmap.decodeEPMAP(rawPayload)
+                    if epmapSection is not None:
+                        transportSection["EPMAP"] = epmapSection
                 protocolKey = "TCP"
             elif isUdp:
                 # Build UDP section; decode DNS if present
@@ -4065,6 +4089,23 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 }
                 if dnsSection is not None:
                     transportSection["DNS"] = dnsSection
+                # Decode mDNS on UDP/5353.
+                if dstPort == 5353 or srcPort == 5353:
+                    mdnsSection = dec_mdns.decodeMDNS(rawPayload)
+                    if mdnsSection is not None:
+                        transportSection["mDNS"] = mdnsSection
+                # Decode LLMNR on UDP/5355.
+                if dstPort == 5355 or srcPort == 5355:
+                    llmnrSection = dec_llmnr.decodeLLMNR(rawPayload)
+                    if llmnrSection is not None:
+                        transportSection["LLMNR"] = llmnrSection
+                # Decode SSDP / UPnP discovery on UDP/1900.
+                if dstPort == 1900 or srcPort == 1900:
+                    ssdpSection = dec_ssdp.decodeSSDP(rawPayload)
+                    if ssdpSection is not None:
+                        transportSection["SSDP"] = ssdpSection
+                        if ssdpSection.get("UPnP"):
+                            transportSection["UPnP"] = ssdpSection
                 # Decode SNMP on UDP ports 161/162
                 if dstPort in (161, 162) or srcPort in (161, 162):
                     snmpSection = dec_snmp.decodeSNMP(p)
@@ -4075,6 +4116,16 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     dhcpSection = dec_dhcp.decodeDHCP(p)
                     if dhcpSection is not None:
                         transportSection["DHCP"] = dhcpSection
+                # Decode DHCPv6 on UDP ports 546/547.
+                if dstPort in (546, 547) or srcPort in (546, 547):
+                    dhcpv6Section = dec_dhcpv6.decodeDHCPv6(rawPayload)
+                    if dhcpv6Section is not None:
+                        transportSection["DHCPv6"] = dhcpv6Section
+                # EPMAP can also be carried over connectionless RPC on UDP/135.
+                if dstPort == 135 or srcPort == 135:
+                    epmapSection = dec_epmap.decodeEPMAP(rawPayload)
+                    if epmapSection is not None:
+                        transportSection["EPMAP"] = epmapSection
                 # Decode NTP on UDP port 123
                 if dstPort == 123 or srcPort == 123:
                     ntpSection = dec_ntp.decodeNTP(p)

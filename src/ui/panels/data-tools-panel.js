@@ -1364,12 +1364,15 @@ const lookupDceRpcService = convDecoders.lookupDceRpcService;
 const decodeLdapFromBytes = convDecoders.decodeLdapFromBytes;
 const decodeSmbFromBytes = convDecoders.decodeSmbFromBytes;
 const decodeEpmapFromBytes = convDecoders.decodeEpmapFromBytes;
+const decodeSsdpFromBytes = convDecoders.decodeSsdpFromBytes;
+const decodeGrpcFromBytes = convDecoders.decodeGrpcFromBytes;
 const decodeSipFromBytes = convDecoders.decodeSipFromBytes;
 const decodeSmppFromBytes = convDecoders.decodeSmppFromBytes;
 const decodeSoulseekFromBytes = convDecoders.decodeSoulseekFromBytes;
 const decodeBittorrentFromBytes = convDecoders.decodeBittorrentFromBytes;
 const decodeKerberosFromBytes = convDecoders.decodeKerberosFromBytes;
 const decodeDnsFromBytes = convDecoders.decodeDnsFromBytes;
+const decodeMdnsFromBytes = convDecoders.decodeMdnsFromBytes;
 const decodeLlmnrFromBytes = convDecoders.decodeLlmnrFromBytes;
 const decodeNbnsFromBytes = convDecoders.decodeNbnsFromBytes;
 const decodeNbdgmFromBytes = convDecoders.decodeNbdgmFromBytes;
@@ -1497,6 +1500,19 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
     protocol: result.protocol,
     fields: Array.isArray(result.fields) ? result.fields : [],
   });
+  // Special handling for Plain text — scrollable pre-formatted container.
+  if (result.protocol === "Plain text" && result.fields) {
+    const textField = result.fields.find((f) => f.name === "Text");
+    if (textField) {
+      const container = document.createElement("div");
+      container.className = "data-tools-proto-plaintext";
+      const pre = document.createElement("pre");
+      pre.textContent = textField.value;
+      container.appendChild(pre);
+      protoOutput.appendChild(container);
+      return;
+    }
+  }
   if (result.imageError) {
     const message = document.createElement("div");
     message.className = "data-tools-proto-image-message";
@@ -1625,6 +1641,11 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeSmbFromBytes(bytes);
     case "epmap":
       return decodeEpmapFromBytes(bytes);
+    case "ssdp":
+    case "upnp":
+      return decodeSsdpFromBytes(bytes);
+    case "grpc":
+      return decodeGrpcFromBytes(bytes);
     case "sip":
       return decodeSipFromBytes(bytes);
     case "smpp":
@@ -1637,6 +1658,10 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeKerberosFromBytes(bytes);
     case "dns":
       return decodeDnsFromBytes(bytes);
+    case "mdns":
+      return decodeMdnsFromBytes(bytes);
+    case "bonjour":
+      return decodeMdnsFromBytes(bytes);
     case "llmnr":
       return decodeLlmnrFromBytes(bytes);
     case "nbns":
@@ -1855,19 +1880,116 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
   // decodable data.
   protoOutput.innerHTML = "";
   delete protoOutput.dataset.decodedResult;
+  const totalCount = packets.length;
   const summary = document.createElement("div");
   summary.className = "data-tools-proto-stream-summary";
   const protocolLabel = resolvedProtocol && resolvedProtocol !== "auto"
     ? resolvedProtocol.toUpperCase()
     : "AUTO";
+
+  // Plain text streams are rendered as one continuous text box. Do not add
+  // packet headers, field tables, or per-packet wrapper elements: the packet
+  // payloads should appear back-to-back in capture order.
+  if (resolvedProtocol === "plaintext") {
+    const container = document.createElement("div");
+    container.className = "data-tools-proto-plaintext";
+    const pre = document.createElement("pre");
+    container.appendChild(pre);
+    protoOutput.appendChild(container);
+
+    let firstSuccessfulResult = null;
+    for (let packetIndex = 0; packetIndex < totalCount; packetIndex += 1) {
+      const packet = packets[packetIndex] || {};
+      const bytes = packet.bytes;
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) continue;
+      const result = decodeWithSelectedProtocol(bytes, "plaintext");
+      if (!result) continue;
+      if (!firstSuccessfulResult) firstSuccessfulResult = result;
+      const textField = Array.isArray(result.fields)
+        ? result.fields.find((field) => field.name === "Text")
+        : null;
+      if (textField) pre.textContent += String(textField.value ?? "");
+    }
+
+    if (firstSuccessfulResult) {
+      activeDataToolsProtoResult = firstSuccessfulResult;
+      protoOutput.dataset.decodedResult = JSON.stringify({
+        protocol: firstSuccessfulResult.protocol,
+        fields: Array.isArray(firstSuccessfulResult.fields)
+          ? firstSuccessfulResult.fields
+          : [],
+      });
+    } else {
+      activeDataToolsProtoResult = null;
+      pre.textContent = "No packets with decodable plain text data.";
+    }
+    return;
+  }
+
   summary.textContent = `Decoded ${packets.length} packet${packets.length === 1 ? "" : "s"} as ${protocolLabel} (newest first).`;
   protoOutput.appendChild(summary);
 
   let firstSuccessfulResult = null;
   let renderedCount = 0;
   let hiddenCount = 0;
-  const totalCount = packets.length;
   const hideNoOp = convDecodesHideNoOp === true;
+
+    // gRPC over HTTP/2 is a stream protocol: HTTP/2 control frames, DATA
+    // frames, and the 5-byte gRPC envelopes routinely span multiple captured
+    // TCP packets. Decode the reassembled stream once instead of asking the
+    // envelope decoder to parse each TCP segment independently. The regular
+    // per-packet stack remains appropriate for message-oriented protocols.
+    if (resolvedProtocol === "grpc" && totalCount > 0) {
+      const streamByteLength = packets.reduce((total, packet) => {
+        return total + (packet?.bytes instanceof Uint8Array ? packet.bytes.length : 0);
+      }, 0);
+      const streamBytes = new Uint8Array(streamByteLength);
+      let streamOffset = 0;
+      packets.forEach((packet) => {
+        if (!(packet?.bytes instanceof Uint8Array)) return;
+        streamBytes.set(packet.bytes, streamOffset);
+        streamOffset += packet.bytes.length;
+      });
+      const streamResult = decodeWithSelectedProtocol(streamBytes, "grpc");
+      if (streamResult) {
+        const streamBlock = document.createElement("div");
+        streamBlock.className = "data-tools-proto-stream-block";
+        const streamHeader = document.createElement("div");
+        streamHeader.className = "data-tools-proto-stream-header";
+        streamHeader.textContent = `gRPC stream (${totalCount} packets, ${streamByteLength} bytes)`;
+        streamBlock.appendChild(streamHeader);
+        appendStreamPacketBlock(
+          protoOutput,
+          streamBlock,
+          streamResult,
+          selectedProtocol,
+          resolvedProtocol,
+          "Reassembled HTTP/2 stream",
+        );
+        firstSuccessfulResult = streamResult;
+        renderedCount = 1;
+      }
+      if (hideNoOp && renderedCount === 0) hiddenCount = totalCount;
+    }
+
+    if (resolvedProtocol === "grpc" && renderedCount > 0) {
+      if (hideNoOp) {
+        const hiddenNote = document.createElement("span");
+        hiddenNote.className = "data-tools-proto-stream-summary-hidden";
+        hiddenNote.textContent = ` (${renderedCount} reassembled stream shown, ${hiddenCount} packet segments represented)`;
+        summary.appendChild(hiddenNote);
+      }
+      activeDataToolsProtoResult = firstSuccessfulResult;
+      protoOutput.dataset.decodedResult = JSON.stringify({
+        protocol: firstSuccessfulResult.protocol,
+        fields: Array.isArray(firstSuccessfulResult.fields) ? firstSuccessfulResult.fields : [],
+      });
+      if (options && options.requestSummary && activeConvSubtab === CONV_DECODES_SUBTAB) {
+        requestDataToolsBackgroundSummary(CONV_DECODES_SUBTAB);
+      }
+      return;
+    }
+
   for (let reverseIndex = 0; reverseIndex < totalCount; reverseIndex += 1) {
     const packetIndex = totalCount - 1 - reverseIndex;
     const entry = packets[packetIndex] || {};
@@ -2205,6 +2327,13 @@ module.exports = {
   decodeBsonFromBytes,
   decodeLdapFromBytes,
   decodeSmbFromBytes,
+  decodeEpmapFromBytes,
+  decodeSsdpFromBytes,
+  decodeGrpcFromBytes,
+  decodeDnsFromBytes,
+  decodeMdnsFromBytes,
+  decodeLlmnrFromBytes,
+  decodeDhcpv6FromBytes,
   decodeSipFromBytes,
   decodeSmppFromBytes,
   decodeSoulseekFromBytes,

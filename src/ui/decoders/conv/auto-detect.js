@@ -22,11 +22,14 @@ const { decodeBerFromBytes } = require("./ber");
 const { decodeDerFromBytes } = require("./der");
 const { decodeLdapFromBytes } = require("./ldap");
 const { decodeEpmapFromBytes } = require("./epmap");
+const { decodeSsdpFromBytes } = require("./ssdp");
+const { decodeGrpcFromBytes } = require("./grpc");
 const { decodeSmppFromBytes } = require("./smpp");
 const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
 const { decodeKerberosFromBytes } = require("./kerberos");
 const { decodeDnsFromBytes } = require("./dns");
+const { decodeMdnsFromBytes } = require("./mdns");
 const { decodeLlmnrFromBytes } = require("./llmnr");
 const { decodeNbnsFromBytes } = require("./nbns");
 const { decodeNbdgmFromBytes } = require("./nbdgm");
@@ -193,6 +196,12 @@ function autoDetectProtoFromBytes(bytes, options) {
     // valid msgpack/protobuf frame.
     if (typeof decodeEpmapFromBytes === "function" && decodeEpmapFromBytes(bytes)) {
         return "epmap";
+    }
+    if (typeof decodeSsdpFromBytes === "function" && decodeSsdpFromBytes(bytes)) {
+        return "ssdp";
+    }
+    if (typeof decodeGrpcFromBytes === "function" && decodeGrpcFromBytes(bytes)) {
+        return "grpc";
     }
 
     const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
