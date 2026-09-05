@@ -574,10 +574,10 @@
               <label for="data-tools-proto-select">Protocol</label>
               <select id="data-tools-proto-select">
                 <option value="auto" selected>Auto-detect</option>
-                <option value="plaintext">Plain text (Raw text dump)</option>
+                <option value="plaintext">Plain text</option>
                 <option value="http">HTTP (Web traffic)</option>
                 <option value="ftp">FTP (File transfer)</option>
-                <option value="smb">SMB / Samba (Server Message Block file/print sharing)</option>
+                <option value="smb">SMB / Samba</option>
                 <option value="epmap">EPMAP (DCE/RPC endpoint mapper)</option>
                 <option value="ssdp">SSDP / UPnP (Service discovery)</option>
                 <option value="grpc">gRPC (HTTP/2 RPC)</option>
@@ -596,8 +596,8 @@
                 <option value="ber">ASN.1 BER (Basic Encoding Rules)</option>
                 <option value="der">ASN.1 DER (Distinguished Encoding Rules)</option>
                 <option value="ldap">LDAP (Directory access)</option>
-                <option value="sip">SIP (VoIP signaling)</option>
-                <option value="smpp">SMPP (SMS gateway protocol)</option>
+                <option value="sip">SIP</option>
+                <option value="smpp">SMPP</option>
                 <option value="kerberos">Kerberos (krb5)</option>
                 <option value="dns">DNS (Domain Name System)</option>
                 <option value="mdns">mDNS / Bonjour (DNS-SD)</option>
@@ -618,8 +618,8 @@
                 <option value="cdp">CDP (Cisco Discovery)</option>
                 <option value="mndp">MNDP (MikroTik Neighbor Discovery)</option>
                 <option value="websocket">WebSocket (RFC 6455)</option>
-                <option value="soulseek">Soulseek (P2P file sharing)</option>
-                <option value="bittorrent">BitTorrent (P2P torrents)</option>
+                <option value="soulseek">Soulseek</option>
+                <option value="bittorrent">BitTorrent</option>
                 <option value="jpeg">JPEG (Image)</option>
                 <option value="png">PNG (Image)</option>
                 <option value="gif">GIF (Image)</option>
@@ -1631,6 +1631,7 @@ No artifacts saved.</pre>
               <input id="list-group-streams" type="checkbox" />
               Group by stream
             </label>
+            <span class="list-source-mask-hint">Source visibility is managed in Stats → Capture Sources</span>
             <details id="list-columns-control">
               <summary>Columns</summary>
               <div id="list-columns-menu"></div>
@@ -2367,6 +2368,7 @@ No artifacts saved.</pre>
             <div id="active-recon-scroll">
               <div id="general-info-head" class="PHead">General Information</div>
               <div id="packet-readouts" class="packet-readouts">
+                <div id="capture-source-readout">PCAP: —</div>
                 <div id="timestamp"></div>
                 <div id="current-stream-packet">Current Stream Packet: 0 / 0</div>
                 <div id="current-filtered-packet">Current Filtered Packet: 0 / 0</div>

@@ -3488,6 +3488,86 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   };
 }
 
+function getCaptureSources(capturedPackets) {
+  const metadataSources = capturedPackets?.["capture.metadata"]?.sources;
+  if (Array.isArray(metadataSources) && metadataSources.length > 0) {
+    return metadataSources.map((source, index) => ({
+      sourceId: String(source?.sourceId || `source-${index + 1}`),
+      sourceName: String(source?.sourceName || `Source ${index + 1}`),
+      ordinal: Number.isFinite(Number(source?.ordinal)) ? Number(source.ordinal) : index,
+      packetCount: Number.isFinite(Number(source?.packetCount)) ? Number(source.packetCount) : 0,
+    }));
+  }
+
+  const byId = new Map();
+  Object.values(capturedPackets?.host || {}).forEach((packets) => {
+    if (!Array.isArray(packets)) return;
+    packets.forEach((packet) => {
+      const info = packet?.["packet.info"] || {};
+      const sourceId = typeof info["capture.sourceId"] === "string"
+        ? info["capture.sourceId"].trim()
+        : "";
+      if (!sourceId) return;
+      const current = byId.get(sourceId) || {
+        sourceId,
+        sourceName: String(info["capture.sourceSession"] || sourceId),
+        ordinal: byId.size,
+        packetCount: 0,
+      };
+      current.packetCount += 1;
+      byId.set(sourceId, current);
+    });
+  });
+  return [...byId.values()];
+}
+
+function getPacketsForCaptureSource(capturedPackets, sourceId) {
+  const normalizedSourceId = String(sourceId || "").trim();
+  if (!normalizedSourceId) return [];
+  const packets = [];
+  Object.values(capturedPackets?.host || {}).forEach((hostPackets) => {
+    if (!Array.isArray(hostPackets)) return;
+    hostPackets.forEach((packet) => {
+      if (packet?.["packet.info"]?.["capture.sourceId"] === normalizedSourceId) {
+        packets.push(packet);
+      }
+    });
+  });
+  return packets;
+}
+
+function buildStatsComparison(leftStats, rightStats, leftLabel, rightLabel) {
+  const fields = [
+    ["Packets", "totalPackets"],
+    ["Streams", "totalStreams"],
+    ["Traffic", "totalTraffic"],
+    ["Encrypted", "encryptedCount"],
+    ["Unencrypted", "unencryptedCount"],
+    ["Undecodable", "undecodableCount"],
+    ["Retransmissions", "retransmissionCount"],
+    ["Out-of-order", "outOfOrderCount"],
+  ];
+  return {
+    leftLabel,
+    rightLabel,
+    rows: fields.map(([label, key]) => ({
+      label,
+      left: Number(leftStats?.[key] || 0),
+      right: Number(rightStats?.[key] || 0),
+      delta: Number(rightStats?.[key] || 0) - Number(leftStats?.[key] || 0),
+    })),
+  };
+}
+
+function buildSourceComparisonStats(capturedPackets, leftSelection, rightSelection) {
+  const selectPackets = (selection) => selection === "__whole_session__"
+    ? capturedPackets
+    : { host: { comparison: getPacketsForCaptureSource(capturedPackets, selection) } };
+  const leftStats = buildCaptureStats(selectPackets(leftSelection), 0);
+  const rightStats = buildCaptureStats(selectPackets(rightSelection), 0);
+  return buildStatsComparison(leftStats, rightStats, leftSelection, rightSelection);
+}
+
 // Handles make stats section.
 function makeStatsSection({
   documentRef,
@@ -4334,6 +4414,7 @@ function createStatsPanel(options) {
     mainTabStats,
     getJsonCapture,
     getCapturedPackets,
+    getAllCapturedPackets,
     filterInputEl,
     syncFilterHighlight,
     runFilterQuery,
@@ -4344,6 +4425,10 @@ function createStatsPanel(options) {
     listCarvableFilesForStats,
     listDownloadedFilesForStats,
     openCarvedFileInConv,
+    getSourceState,
+    updateSourceState,
+    getActiveStatsSubtab,
+    setActiveStatsSubtab: setActiveStatsSubtabOption,
   } = options;
   let disposeHeatmapResize = null;
   const resolveKeystorePanel = () => {
@@ -4538,9 +4623,15 @@ function createStatsPanel(options) {
       anomaliesTabBtn.className = "stats-subtab-btn";
       anomaliesTabBtn.textContent = "Anomalies";
 
+      const sourcesTabBtn = documentRef.createElement("button");
+      sourcesTabBtn.type = "button";
+      sourcesTabBtn.className = "stats-subtab-btn";
+      sourcesTabBtn.textContent = "Capture Sources";
+
       subtabRow.appendChild(statisticsTabBtn);
       subtabRow.appendChild(mapTabBtn);
       subtabRow.appendChild(anomaliesTabBtn);
+      subtabRow.appendChild(sourcesTabBtn);
       content.appendChild(subtabRow);
 
       const statisticsPanel = documentRef.createElement("div");
@@ -4554,9 +4645,14 @@ function createStatsPanel(options) {
       anomaliesPanel.className = "stats-subtab-panel";
       anomaliesPanel.style.display = "none";
 
+      const sourcesPanel = documentRef.createElement("div");
+      sourcesPanel.className = "stats-subtab-panel";
+      sourcesPanel.style.display = "none";
+
       content.appendChild(statisticsPanel);
       content.appendChild(mapPanel);
       content.appendChild(anomaliesPanel);
+      content.appendChild(sourcesPanel);
 
       const stats = buildCaptureStats(
         getCapturedPackets(),
@@ -4586,13 +4682,19 @@ function createStatsPanel(options) {
       const setActiveStatsSubtab = (tabId) => {
         const showMap = tabId === "map";
         const showAnomalies = tabId === "anomalies";
-        const showStatistics = !showMap && !showAnomalies;
+        const showSources = tabId === "sources";
+        const showStatistics = !showMap && !showAnomalies && !showSources;
         statisticsTabBtn.classList.toggle("active", showStatistics);
         mapTabBtn.classList.toggle("active", showMap);
         anomaliesTabBtn.classList.toggle("active", showAnomalies);
+        sourcesTabBtn.classList.toggle("active", showSources);
         statisticsPanel.style.display = showStatistics ? "block" : "none";
         mapPanel.style.display = showMap ? "block" : "none";
         anomaliesPanel.style.display = showAnomalies ? "block" : "none";
+        sourcesPanel.style.display = showSources ? "block" : "none";
+        if (typeof setActiveStatsSubtabOption === "function") {
+          setActiveStatsSubtabOption(tabId);
+        }
         if (showMap && typeof heatmapSectionRenderer === "function") {
           heatmapSectionRenderer();
         }
@@ -4604,6 +4706,139 @@ function createStatsPanel(options) {
       statisticsTabBtn.addEventListener("click", () => setActiveStatsSubtab("statistics"));
       mapTabBtn.addEventListener("click", () => setActiveStatsSubtab("map"));
       anomaliesTabBtn.addEventListener("click", () => setActiveStatsSubtab("anomalies"));
+      sourcesTabBtn.addEventListener("click", () => setActiveStatsSubtab("sources"));
+
+      const renderSourcesPanel = () => {
+        sourcesPanel.replaceChildren();
+        const allPackets = typeof getAllCapturedPackets === "function"
+          ? getAllCapturedPackets()
+          : getCapturedPackets();
+        const sources = getCaptureSources(allPackets);
+        if (sources.length === 0) {
+          sourcesPanel.textContent = "This session does not contain individually identified capture sources.";
+          return;
+        }
+        const sourceState = typeof getSourceState === "function" ? getSourceState() : {};
+        const note = documentRef.createElement("div");
+        note.className = "stats-inline-note";
+        note.textContent = "Toggle sources to mask them from List and Stats. Source colors can be enabled in List view.";
+        sourcesPanel.appendChild(note);
+        sources.forEach((source) => {
+          const row = documentRef.createElement("label");
+          row.className = "stats-source-row";
+          const checkbox = documentRef.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = sourceState[source.sourceId]?.visible !== false;
+          checkbox.addEventListener("change", () => {
+            if (typeof updateSourceState === "function") {
+              updateSourceState(source.sourceId, { visible: checkbox.checked });
+              return;
+            }
+            renderSourcesPanel();
+          });
+          row.appendChild(checkbox);
+          const colorToggle = documentRef.createElement("input");
+          colorToggle.type = "checkbox";
+          colorToggle.title = "Color-code this source in List view";
+          colorToggle.checked = sourceState[source.sourceId]?.colorEnabled === true;
+          colorToggle.addEventListener("change", () => {
+            if (typeof updateSourceState === "function") {
+              updateSourceState(source.sourceId, { colorEnabled: colorToggle.checked });
+            }
+            colorInput.disabled = !colorToggle.checked;
+            colorInput.focus();
+          });
+          const colorInput = documentRef.createElement("input");
+          colorInput.type = "color";
+          colorInput.value = /^#[0-9a-f]{6}$/i.test(sourceState[source.sourceId]?.color || "")
+            ? sourceState[source.sourceId].color
+            : "#4f8cff";
+          colorInput.title = "Choose List view color";
+          colorInput.disabled = !colorToggle.checked;
+          colorInput.addEventListener("input", () => {
+            if (typeof updateSourceState === "function") {
+              updateSourceState(source.sourceId, { color: colorInput.value });
+            }
+          });
+          row.appendChild(colorToggle);
+          row.appendChild(colorInput);
+          row.appendChild(documentRef.createTextNode(`${source.sourceName} (${source.packetCount} packets)`));
+          sourcesPanel.appendChild(row);
+        });
+        if (sources.length < 2) return;
+
+        const comparison = documentRef.createElement("div");
+        comparison.className = "stats-source-comparison";
+        const controls = documentRef.createElement("div");
+        controls.className = "stats-source-comparison-controls";
+        const makeSelect = () => {
+          const select = documentRef.createElement("select");
+          const whole = documentRef.createElement("option");
+          whole.value = "__whole_session__";
+          whole.textContent = "Whole session";
+          select.appendChild(whole);
+          sources.forEach((source) => {
+            const option = documentRef.createElement("option");
+            option.value = source.sourceId;
+            option.textContent = source.sourceName;
+            select.appendChild(option);
+          });
+          return select;
+        };
+        const leftSelect = makeSelect();
+        const rightSelect = makeSelect();
+        leftSelect.value = sources[0].sourceId;
+        const result = documentRef.createElement("div");
+        const renderComparison = () => {
+          const comparisonStats = buildSourceComparisonStats(
+            allPackets,
+            leftSelect.value,
+            rightSelect.value,
+          );
+          const leftLabel = leftSelect.options[leftSelect.selectedIndex]?.textContent || "Left";
+          const rightLabel = rightSelect.options[rightSelect.selectedIndex]?.textContent || "Right";
+          comparisonStats.leftLabel = leftLabel;
+          comparisonStats.rightLabel = rightLabel;
+          result.replaceChildren();
+          const table = documentRef.createElement("table");
+          table.className = "stats-comparison-table";
+          const thead = documentRef.createElement("thead");
+          const headerRow = documentRef.createElement("tr");
+          ["Metric", comparisonStats.leftLabel, comparisonStats.rightLabel, "Difference"].forEach((label) => {
+            const th = documentRef.createElement("th");
+            th.textContent = label;
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+          const tbody = documentRef.createElement("tbody");
+          comparisonStats.rows.forEach((entry) => {
+            const row = documentRef.createElement("tr");
+            [
+              entry.label,
+              String(entry.left),
+              String(entry.right),
+              `${entry.delta >= 0 ? "+" : ""}${entry.delta}`,
+            ].forEach((value) => {
+              const cell = documentRef.createElement("td");
+              cell.textContent = value;
+              row.appendChild(cell);
+            });
+            tbody.appendChild(row);
+          });
+          table.appendChild(tbody);
+          result.appendChild(table);
+        };
+        leftSelect.addEventListener("change", renderComparison);
+        rightSelect.addEventListener("change", renderComparison);
+        controls.appendChild(leftSelect);
+        controls.appendChild(documentRef.createTextNode(" vs "));
+        controls.appendChild(rightSelect);
+        comparison.appendChild(controls);
+        comparison.appendChild(result);
+        sourcesPanel.appendChild(comparison);
+        renderComparison();
+      };
 
       // Defensive normalization so unusual packet schemas do not break stats rendering.
       const normalizeStringArray = (values) =>
@@ -4687,11 +4922,16 @@ function createStatsPanel(options) {
         };
       }
 
-      const initialSubtab = showOptions?.openSubtab === "map"
+      const requestedSubtab = showOptions?.openSubtab ||
+        (typeof getActiveStatsSubtab === "function" ? getActiveStatsSubtab() : "statistics");
+      const initialSubtab = requestedSubtab === "map"
         ? "map"
-        : showOptions?.openSubtab === "anomalies"
+        : requestedSubtab === "anomalies"
           ? "anomalies"
+          : requestedSubtab === "sources"
+            ? "sources"
           : "statistics";
+      renderSourcesPanel();
       setActiveStatsSubtab(initialSubtab);
 
       const focusLocation = showOptions?.focusLocation;
@@ -4987,6 +5227,10 @@ module.exports = {
   id: "stats",
   createStatsPanel,
   buildCaptureStats,
+  getCaptureSources,
+  getPacketsForCaptureSource,
+  buildStatsComparison,
+  buildSourceComparisonStats,
   collectStatsAnomalies,
   detectStatsAnomaliesPortscan,
   detectStatsAnomaliesBruteForce,

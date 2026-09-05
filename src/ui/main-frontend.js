@@ -1051,6 +1051,63 @@ const VALID_CRYPT_SUBTABS = [
 ];
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_HASHES_SUBTAB;
+let activeStatsSubtab = "statistics";
+let sourceViewState = {};
+let sourceViewStateVersion = 0;
+
+function getCaptureSourceId(packet) {
+  const sourceId = packet?.["packet.info"]?.["capture.sourceId"];
+  return typeof sourceId === "string" ? sourceId.trim() : "";
+}
+
+function getCaptureSourceState() {
+  return sourceViewState;
+}
+
+function updateCaptureSourceState(sourceId, patch = {}) {
+  const normalizedId = String(sourceId || "").trim();
+  if (!normalizedId) return;
+  sourceViewState = {
+    ...sourceViewState,
+    [normalizedId]: {
+      ...(sourceViewState[normalizedId] || {}),
+      ...patch,
+    },
+  };
+  sourceViewStateVersion += 1;
+  bumpPacketNavigationCacheVersion();
+  if (activeMainTab === MAIN_TAB_STATS && Object.prototype.hasOwnProperty.call(patch, "visible")) {
+    showStats({ openSubtab: "sources" });
+  }
+  if (activeMainTab === MAIN_TAB_LIST) showPacketList();
+}
+
+function isCaptureSourceVisible(packet) {
+  const sourceId = getCaptureSourceId(packet);
+  return !sourceId || sourceViewState[sourceId]?.visible !== false;
+}
+
+function getVisibleCapturedPackets() {
+  if (!capturedPackets || typeof capturedPackets !== "object") return capturedPackets;
+  const host = {};
+  Object.entries(capturedPackets.host || {}).forEach(([hostName, packets]) => {
+    host[hostName] = Array.isArray(packets)
+      ? packets.filter((packet) => isCaptureSourceVisible(packet))
+      : packets;
+  });
+  return { ...capturedPackets, host };
+}
+
+function hasHiddenCaptureSources() {
+  return Object.values(sourceViewState).some((entry) => entry?.visible === false);
+}
+
+function restoreCaptureSourceState(sessionState) {
+  sourceViewState = sessionState?.sourceViewState && typeof sessionState.sourceViewState === "object"
+    ? JSON.parse(JSON.stringify(sessionState.sourceViewState))
+    : {};
+  sourceViewStateVersion += 1;
+}
 
 // Resolves the user's preferred landing tab from settings, falling
 // back to the default if the persisted value is missing or unknown.
@@ -7130,7 +7187,8 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
   },
   mainTabStats: MAIN_TAB_STATS,
   getJsonCapture: () => jsonCapture,
-  getCapturedPackets: () => capturedPackets,
+  getCapturedPackets: getVisibleCapturedPackets,
+  getAllCapturedPackets: () => capturedPackets,
   filterInputEl,
   syncFilterHighlight,
   runFilterQuery,
@@ -7144,6 +7202,14 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
   listCarvableFilesForStats,
   listDownloadedFilesForStats,
   openCarvedFileInConv: loadCarvedFileCandidateIntoConvTab,
+  getSourceState: getCaptureSourceState,
+  updateSourceState: updateCaptureSourceState,
+  getActiveStatsSubtab: () => activeStatsSubtab,
+  setActiveStatsSubtab: (tab) => {
+    activeStatsSubtab = ["statistics", "map", "anomalies", "sources"].includes(tab)
+      ? tab
+      : "statistics";
+  },
 });
 
 const summaryPanel = createSummaryPanel({
@@ -8503,7 +8569,7 @@ const {
   },
   dehydratePacket,
   logErrorEntry,
-  getCapturedPackets: () => capturedPackets,
+  getCapturedPackets: getVisibleCapturedPackets,
   getFilteredPackets: () => filteredPackets,
   getPacketsForHost: () => p,
   getCaptureApi: () => window.captureapi,
@@ -8919,6 +8985,7 @@ function getAllPacketsForHostNavigation() {
   if (
     allHostsNavigationPacketsCache
     && allHostsNavigationPacketsCache.version === packetNavigationCacheVersion
+    && allHostsNavigationPacketsCache.sourceVersion === sourceViewStateVersion
   ) {
     return allHostsNavigationPacketsCache.packets;
   }
@@ -8941,10 +9008,12 @@ function getAllPacketsForHostNavigation() {
     for (let i = 0; i < listEntries.length; i += 1) {
       const entry = listEntries[i];
       const hostPackets = hostMap[entry.host];
-      allPackets[i] = Array.isArray(hostPackets) ? hostPackets[entry.pktIdx] : null;
+      const packet = Array.isArray(hostPackets) ? hostPackets[entry.pktIdx] : null;
+      allPackets[i] = isCaptureSourceVisible(packet) ? packet : null;
     }
     allHostsNavigationPacketsCache = {
       version: packetNavigationCacheVersion,
+      sourceVersion: sourceViewStateVersion,
       packets: allPackets,
     };
     return allPackets;
@@ -8954,11 +9023,12 @@ function getAllPacketsForHostNavigation() {
   const allPackets = [];
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-    allPackets.push(...hostPackets);
+      allPackets.push(...hostPackets.filter((packet) => isCaptureSourceVisible(packet)));
   });
   const sortedAllPackets = sortPacketsByOwnStreamOrder(allPackets);
   allHostsNavigationPacketsCache = {
     version: packetNavigationCacheVersion,
+    sourceVersion: sourceViewStateVersion,
     packets: sortedAllPackets,
   };
   return sortedAllPackets;
@@ -8978,6 +9048,7 @@ function getPacketsForSelectedHost(selectedHost) {
   if (
     cachedHostPackets
     && cachedHostPackets.version === packetNavigationCacheVersion
+    && cachedHostPackets.sourceVersion === sourceViewStateVersion
   ) {
     return cachedHostPackets.packets;
   }
@@ -8990,9 +9061,12 @@ function getPacketsForSelectedHost(selectedHost) {
   // will detect this and return the input without copying. We still pass
   // the original array (not a spread copy) so the short-circuit returns
   // the same reference — no allocation at all for the common case.
-  const sortedHostPackets = sortPacketsByOwnStreamOrder(hostPackets);
+  const sortedHostPackets = sortPacketsByOwnStreamOrder(
+    hostPackets.filter((packet) => isCaptureSourceVisible(packet)),
+  );
   hostNavigationPacketsCache.set(normalizedHost, {
     version: packetNavigationCacheVersion,
+    sourceVersion: sourceViewStateVersion,
     packets: sortedHostPackets,
   });
   return sortedHostPackets;
@@ -9341,7 +9415,7 @@ async function runFilterQuery(filterQuery, options = {}) {
     typeof filterQuery === "string" ? filterQuery.trim() : "";
 
   if (normalizedFilterQuery === "") {
-    filteredPackets = getAllPacketsForHostNavigation();
+    filteredPackets = getAllPacketsForHostNavigation().filter(Boolean);
     if (!updateUi) {
       return;
     }
@@ -9372,6 +9446,7 @@ async function runFilterQuery(filterQuery, options = {}) {
   try {
     const matchedPacketKeys = await evaluateFilterQueryToPacketKeys(filterQuery);
     filteredPackets = await resolvePacketStubsByKeys(matchedPacketKeys);
+    filteredPackets = filteredPackets.filter((packet) => isCaptureSourceVisible(packet));
     filteredPackets = sortPacketsByOwnStreamOrder(filteredPackets);
   } catch (error) {
     const errorText =
@@ -11906,6 +11981,7 @@ async function finalizeLoadedCapture(sessionState) {
   if (sessionState) {
     await restoreSessionState(sessionState);
   } else {
+    sourceViewState = {};
     scheduleSessionKeychainAutoPopulate("file-load");
     statusUpdate("Status: File loaded successfully");
     writeLogEntry("New session initialized: created new session state");
@@ -12036,6 +12112,7 @@ function buildSessionStateSnapshot() {
     fileArtifacts: keystorePanel.getFileArtifactSnapshot
       ? keystorePanel.getFileArtifactSnapshot()
       : [],
+    sourceViewState: deepCloneSessionData(sourceViewState, {}),
     notes: deepCloneSessionData(notesList, []),
     subnet: deepCloneSessionData(
       typeof subnetCalculatorPanel?.getSessionState === "function"
@@ -12062,6 +12139,7 @@ function buildSessionStateSnapshot() {
           ? uint8ArrayToBase64(dataToolsOriginalInputBytes)
           : null,
       crypt: activeCryptSubtab,
+      stats: activeStatsSubtab,
       listSearch: listSearchEl ? listSearchEl.value : "",
       listGroupStreams: listGroupStreamsEl
         ? Boolean(listGroupStreamsEl.checked)
@@ -12358,6 +12436,8 @@ window.addEventListener("beforeunload", () => {
 // Handles restore session state.
 async function restoreSessionState(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return;
+
+  restoreCaptureSourceState(sessionState);
 
   if (typeof subnetCalculatorPanel?.restoreSessionState === "function") {
     subnetCalculatorPanel.restoreSessionState(
@@ -12670,11 +12750,14 @@ async function restoreSessionState(sessionState) {
   const savedCryptTab = VALID_CRYPT_SUBTABS.includes(tabState.crypt)
     ? tabState.crypt
     : CRYPT_HASHES_SUBTAB;
+  activeStatsSubtab = ["statistics", "map", "anomalies", "sources"].includes(tabState.stats)
+    ? tabState.stats
+    : "statistics";
 
   if (savedMainTab === MAIN_TAB_SUMMARY) {
     showSummary();
   } else if (savedMainTab === MAIN_TAB_STATS) {
-    showStats();
+    showStats({ openSubtab: activeStatsSubtab });
   } else if (savedMainTab === MAIN_TAB_LIST) {
     showPacketList();
     const listSearchEl = document.getElementById("list-search");
@@ -16999,6 +17082,7 @@ const listPanel = createListPanel({
     currentPacketKey = packetKey;
   },
   getCurrentPacketKey: () => currentPacketKey,
+  isCaptureSourceVisible,
   syncBookmarkDropdown,
   setActivePacketCursor,
   showAllData,
@@ -17006,6 +17090,7 @@ const listPanel = createListPanel({
   popHexGrid,
   populateDataTypes: (...args) => populateDataTypes(...args),
   isCaptureStoreBackedCapture: () => isCaptureStoreBackedCapture,
+  hasHiddenCaptureSources,
   getCurrentSettings,
   setCurrentSettings,
   getEnableUngroupedListVirtualization: () =>
@@ -29012,6 +29097,12 @@ function infoPanel(pk) {
       : "";
   document.getElementById("timestamp").innerHTML =
     "Timestamp " + packetTimestamp + "<br>" + tcpTimestampSuffix;
+  const captureSourceReadout = document.getElementById("capture-source-readout");
+  if (captureSourceReadout) {
+    const sourceName = packetInfoData["capture.sourceSession"];
+    const sourceId = packetInfoData["capture.sourceId"];
+    captureSourceReadout.textContent = `PCAP: ${sourceName || sourceId || "Current capture"}`;
+  }
 
   //document.getElementById("ip2ip").textContent = sourceIpPort + " ~ " + destIpPort;
   document.getElementById("sideloctable").textContent = "";
