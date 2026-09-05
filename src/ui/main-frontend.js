@@ -230,6 +230,7 @@ const {
 } = require("./panels/keystore-llm-summarizer");
 const { createStatsPanel, buildCaptureStats, collectStatsAnomalies } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
+const { createMachineCorrelationHelpers } = require("./main-frontend/machine-correlation");
 const { createSummaryPanel } = require("./panels/summary-panel");
 const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-panel");
 const { initializeConsentOverlay } = require("./panels/consent-overlay");
@@ -886,6 +887,10 @@ let isCaptureStoreBackedCapture = false;
 let streamProtocol = null;
 let filteredPackets;
 let currentPacketKey;
+// Assigned after the Stats/List panel factories are created. The panels use
+// this through lazy getter callbacks, so declaring it here keeps those
+// callbacks safe during their later event-driven rendering.
+let machineCorrelationHelpers = null;
 let dataTypesOverridePacketKey = null;
 let summaryFromSavedSession = false;
 let lastFilteredNavigationLogMessage = "";
@@ -4750,7 +4755,13 @@ function syncSettingsFormFromState() {
   const settings = getCurrentSettings();
   const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
   const mergeColorsEl = document.getElementById("settings-merge-source-colors");
+  const mergeSnapThresholdEl = document.getElementById("settings-merge-timestamp-snap-threshold");
   if (mergeColorCodingEl) mergeColorCodingEl.checked = settings.merge?.sourceColorCodingEnabled !== false;
+  if (mergeSnapThresholdEl) {
+    mergeSnapThresholdEl.value = Number.isFinite(Number(settings.merge?.timestampSnapThresholdMs))
+      ? String(settings.merge.timestampSnapThresholdMs)
+      : "";
+  }
   if (mergeColorsEl) {
     mergeColorsEl.replaceChildren();
     (settings.merge?.sourceColors || []).forEach((color, index) => {
@@ -5326,6 +5337,7 @@ function readSettingsFormState() {
   const trimmedOpenRouterApiKey = openrouterApiKeyEl ? openrouterApiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
   const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
+  const mergeSnapThresholdEl = document.getElementById("settings-merge-timestamp-snap-threshold");
   const mergeColorInputs = Array.from(document.querySelectorAll("#settings-merge-source-colors input[type=\"color\"]"));
   return normalizeSettings({
     general: {
@@ -5424,6 +5436,9 @@ function readSettingsFormState() {
       sourceColors: mergeColorInputs.length > 0
         ? mergeColorInputs.map((input) => input.value)
         : [...(currentSettings.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors)],
+      timestampSnapThresholdMs: mergeSnapThresholdEl && mergeSnapThresholdEl.value.trim()
+        ? mergeSnapThresholdEl.value
+        : null,
     },
     llm: {
       provider: llmProviderDropdown.getValue(),
@@ -6525,17 +6540,17 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
             ? SETTINGS_SUBTAB_BACKEND
             : tabName === SETTINGS_SUBTAB_DEBUG
               ? SETTINGS_SUBTAB_DEBUG
-                : tabName === SETTINGS_SUBTAB_MERGE
-                  ? SETTINGS_SUBTAB_MERGE
-                  : tabName === SETTINGS_SUBTAB_PLUGINS
-                ? SETTINGS_SUBTAB_PLUGINS
-                : tabName === SETTINGS_SUBTAB_THEMES
-                  ? SETTINGS_SUBTAB_THEMES
-                  : tabName === SETTINGS_SUBTAB_PRIVACY
-                    ? SETTINGS_SUBTAB_PRIVACY
-                    : tabName === SETTINGS_SUBTAB_ABOUT
-                      ? SETTINGS_SUBTAB_ABOUT
-                      : SETTINGS_SUBTAB_STOREFRONT;
+              : tabName === SETTINGS_SUBTAB_MERGE
+                ? SETTINGS_SUBTAB_MERGE
+                : tabName === SETTINGS_SUBTAB_PLUGINS
+                  ? SETTINGS_SUBTAB_PLUGINS
+                  : tabName === SETTINGS_SUBTAB_THEMES
+                    ? SETTINGS_SUBTAB_THEMES
+                    : tabName === SETTINGS_SUBTAB_PRIVACY
+                      ? SETTINGS_SUBTAB_PRIVACY
+                      : tabName === SETTINGS_SUBTAB_ABOUT
+                        ? SETTINGS_SUBTAB_ABOUT
+                        : SETTINGS_SUBTAB_STOREFRONT;
   activeSettingsSubtab = nextTab;
   metrics.trackTabSwitch({ tab: "settings", subtab: nextTab });
   const storefrontBtn = document.getElementById("settings-subtab-storefront");
@@ -7333,6 +7348,7 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
       ? tab
       : "statistics";
   },
+  getMachineCorrelation: () => machineCorrelationHelpers,
 });
 
 const summaryPanel = createSummaryPanel({
@@ -9191,7 +9207,7 @@ function getAllPacketsForHostNavigation() {
   const allPackets = [];
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-      allPackets.push(...hostPackets.filter((packet) => isCaptureSourceVisible(packet)));
+    allPackets.push(...hostPackets.filter((packet) => isCaptureSourceVisible(packet)));
   });
   const sortedAllPackets = sortPacketsByOwnStreamOrder(allPackets);
   allHostsNavigationPacketsCache = {
@@ -12300,6 +12316,7 @@ function buildSessionStateSnapshot() {
       targetHostsDropdown.getValue() ||
       hostFilterEl.value ||
       "",
+    machineCorrelation: machineCorrelationHelpers?.getState?.() || null,
     bookmarkList: [...bookmarkList],
     convInputHistory: deepCloneSessionData(dataToolsInputHistory, []),
     sessionKeychainEntries: deepCloneSessionData(
@@ -17403,6 +17420,29 @@ const listPanel = createListPanel({
   setCurrentSettings,
   getEnableUngroupedListVirtualization: () =>
     Boolean(getCurrentSettings()?.debug?.ungroupedListVirtualizationEnabled),
+  getMachineCorrelation: () => machineCorrelationHelpers,
+});
+
+// Instantiate after both panel factories exist. Their correlation callbacks
+// are intentionally lazy because panel construction happens before this
+// shared helper can be fully wired.
+machineCorrelationHelpers = createMachineCorrelationHelpers({
+  documentRef: document,
+  getCapturedPackets: () => capturedPackets,
+  getCurrentSettings,
+  getCurrentPacket: () => ({
+    packet: p?.[index] || null,
+    index,
+  }),
+  getCurrentHost: () => hostFilterEl?.value || targetHostsDropdown.getValue() || "",
+  getSourceColor: getSourceColorForList,
+  refreshList: () => {
+    if (activeMainTab === MAIN_TAB_LIST) listPanel.showPacketList();
+  },
+  refreshStats: () => {
+    if (activeMainTab === MAIN_TAB_STATS) showStats({ openSubtab: activeStatsSubtab });
+  },
+  writeLogEntry,
 });
 
 const { showPacketList } = listPanel;
@@ -23048,7 +23088,7 @@ function writeSummaryFromLLM() {
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
     let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a concise summary of the following network data, including only the key protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate at most two short paragraphs: paragraph one should cover the most important hard data, and paragraph two should cover only genuinely useful inferences. Do not pad the response or provide an exhaustive narrative. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording. Report each key point once, and prefer omission over repeating or rephrasing information already present in the capture overview or running summary.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}. Please do not repeat any of the summary data that has already been written. Only provide concise, genuinely new key points that have not already been written. When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary. Do NOT include, quote, echo, or restate any portion of the previously written summary in your response — your response must contain ONLY the new key points that are not already covered. Do not wrap your response in a code block or put any of your output inside code fences; return plain Markdown only.`;
-      prompt = prependMultiCaptureSummaryNotice(prompt);
+    prompt = prependMultiCaptureSummaryNotice(prompt);
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -28741,6 +28781,11 @@ async function handlePacketNavigation(navAction, navBookmark) {
       hostFilterEl.value,
       index,
     );
+    machineCorrelationHelpers?.refreshVerifiedReadout?.({
+      packet: activePacket,
+      index,
+      host: packetInfo["capture.sourceHost"] || hostFilterEl.value,
+    });
     syncBookmarkDropdown(currentPacketKey);
     updateCurrentPacketCounters(packetSet, {
       isFilteredView: navAction === "filtered",
@@ -28935,6 +28980,11 @@ function infoPanel(pk) {
     doError("Packet data is unavailable for this entry!");
     return;
   }
+  machineCorrelationHelpers?.refreshVerifiedReadout?.({
+    packet: p,
+    index,
+    host: p["packet.info"]["capture.sourceHost"] || hostFilterEl.value,
+  });
   updateCurrentPacketCounters(pk, {
     isFilteredView: Array.isArray(filteredPackets) && pk === filteredPackets,
   });
