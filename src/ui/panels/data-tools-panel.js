@@ -1500,6 +1500,19 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
     protocol: result.protocol,
     fields: Array.isArray(result.fields) ? result.fields : [],
   });
+  // Special handling for Plain text — scrollable pre-formatted container.
+  if (result.protocol === "Plain text" && result.fields) {
+    const textField = result.fields.find((f) => f.name === "Text");
+    if (textField) {
+      const container = document.createElement("div");
+      container.className = "data-tools-proto-plaintext";
+      const pre = document.createElement("pre");
+      pre.textContent = textField.value;
+      container.appendChild(pre);
+      protoOutput.appendChild(container);
+      return;
+    }
+  }
   if (result.imageError) {
     const message = document.createElement("div");
     message.className = "data-tools-proto-image-message";
@@ -1867,18 +1880,58 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
   // decodable data.
   protoOutput.innerHTML = "";
   delete protoOutput.dataset.decodedResult;
+  const totalCount = packets.length;
   const summary = document.createElement("div");
   summary.className = "data-tools-proto-stream-summary";
   const protocolLabel = resolvedProtocol && resolvedProtocol !== "auto"
     ? resolvedProtocol.toUpperCase()
     : "AUTO";
+
+  // Plain text streams are rendered as one continuous text box. Do not add
+  // packet headers, field tables, or per-packet wrapper elements: the packet
+  // payloads should appear back-to-back in capture order.
+  if (resolvedProtocol === "plaintext") {
+    const container = document.createElement("div");
+    container.className = "data-tools-proto-plaintext";
+    const pre = document.createElement("pre");
+    container.appendChild(pre);
+    protoOutput.appendChild(container);
+
+    let firstSuccessfulResult = null;
+    for (let packetIndex = 0; packetIndex < totalCount; packetIndex += 1) {
+      const packet = packets[packetIndex] || {};
+      const bytes = packet.bytes;
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) continue;
+      const result = decodeWithSelectedProtocol(bytes, "plaintext");
+      if (!result) continue;
+      if (!firstSuccessfulResult) firstSuccessfulResult = result;
+      const textField = Array.isArray(result.fields)
+        ? result.fields.find((field) => field.name === "Text")
+        : null;
+      if (textField) pre.textContent += String(textField.value ?? "");
+    }
+
+    if (firstSuccessfulResult) {
+      activeDataToolsProtoResult = firstSuccessfulResult;
+      protoOutput.dataset.decodedResult = JSON.stringify({
+        protocol: firstSuccessfulResult.protocol,
+        fields: Array.isArray(firstSuccessfulResult.fields)
+          ? firstSuccessfulResult.fields
+          : [],
+      });
+    } else {
+      activeDataToolsProtoResult = null;
+      pre.textContent = "No packets with decodable plain text data.";
+    }
+    return;
+  }
+
   summary.textContent = `Decoded ${packets.length} packet${packets.length === 1 ? "" : "s"} as ${protocolLabel} (newest first).`;
   protoOutput.appendChild(summary);
 
   let firstSuccessfulResult = null;
   let renderedCount = 0;
   let hiddenCount = 0;
-  const totalCount = packets.length;
   const hideNoOp = convDecodesHideNoOp === true;
 
     // gRPC over HTTP/2 is a stream protocol: HTTP/2 control frames, DATA
