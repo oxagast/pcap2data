@@ -512,11 +512,20 @@ function inferMimeType(bytes) {
   return "application/octet-stream";
 }
 
-// Returns entropy label.
+// Returns entropy label (1-9) based on value.
+// 0.0-1.0: 1 (very low), 1.0-2.5: 2 (low), 2.5-4.0: 3 (low-mid),
+// 4.0-5.0: 4 (mid-low), 5.0-5.75: 5 (medium), 5.75-6.5: 6 (mid-high),
+// 6.5-7.0: 7 (high-mid), 7.0-7.6: 8 (high), 7.6-8.0: 9 (very high)
 function getEntropyLabel(entropy) {
-  if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return "High";
-  if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return "Medium";
-  return "Low";
+  if (entropy >= 7.6) return "9";
+  if (entropy >= 7.0) return "8";
+  if (entropy >= 6.5) return "7";
+  if (entropy >= 5.75) return "6";
+  if (entropy >= 5.0) return "5";
+  if (entropy >= 4.0) return "4";
+  if (entropy >= 2.5) return "3";
+  if (entropy >= 1.0) return "2";
+  return "1";
 }
 
 // ── Data type guesser ─────────────────────────────────────────────────────────
