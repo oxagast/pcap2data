@@ -164,6 +164,7 @@ const convertContextMenuMarkup = `
     <div class="ctx-submenu-panel">
       <button id="ctx-export-packet" role="menuitem">Packet</button>
       <button id="ctx-export-payload" role="menuitem">Payload</button>
+      <button id="ctx-export-filtered-pcap" role="menuitem">Filtered packets (.pcap)</button>
       <button id="ctx-export-conv-input" role="menuitem">Conv input</button>
       <button id="ctx-export-conv-raw" role="menuitem">Conv Raw</button>
       <button id="ctx-export-conv-hex" role="menuitem">Conv output (hex)</button>

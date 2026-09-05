@@ -33,6 +33,7 @@ import warnings
 import argparse
 import base64
 import csv
+import hashlib
 import json
 import os
 import queue
@@ -69,6 +70,7 @@ import ipaddress
 from bs4 import BeautifulSoup
 from scipy.stats import entropy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+import multiprocessing
 from urllib.parse import parse_qs, quote, urlparse
 from datetime import datetime
 from decimal import Decimal
@@ -185,16 +187,7 @@ backendRuntimeMode = "unknown"
 backendShutdownReason = "normal"
 backendStartedAtEpoch = time.time()
 processingJobLock = threading.Lock()
-processingJobInfo = {
-    "jobId": None,
-    "startedAtEpoch": None,
-    "pcapPath": None,
-    # Live progress counters written by the ingest loop so that the
-    # /status endpoint can expose them even when the bridge has been
-    # starved by the early-yield threshold gate.
-    "processedPackets": 0,
-    "totalPackets": 0,
-}
+processingJobs = {}
 backendJobsProcessedSinceStart = 0
 
 
@@ -513,20 +506,41 @@ def _applyRuntimeConfigUpdate(request):
 
 def _setActiveProcessingJob(jobId, pcapPath):
     with processingJobLock:
-        processingJobInfo["jobId"] = str(jobId)
-        processingJobInfo["startedAtEpoch"] = float(time.time())
-        processingJobInfo["pcapPath"] = str(pcapPath or "")
-        processingJobInfo["processedPackets"] = 0
-        processingJobInfo["totalPackets"] = 0
+        normalizedJobId = str(jobId)
+        processingJobs[normalizedJobId] = {
+            "jobId": normalizedJobId,
+            "startedAtEpoch": float(time.time()),
+            "pcapPath": str(pcapPath or ""),
+            "processedPackets": 0,
+            "totalPackets": 0,
+        }
 
 
-def _clearActiveProcessingJob():
+def _clearActiveProcessingJob(jobId):
     with processingJobLock:
-        processingJobInfo["jobId"] = None
-        processingJobInfo["startedAtEpoch"] = None
-        processingJobInfo["pcapPath"] = None
-        processingJobInfo["processedPackets"] = 0
-        processingJobInfo["totalPackets"] = 0
+        processingJobs.pop(str(jobId), None)
+
+
+def _runCaptureInProcess(runArgs, progressQueue, resultQueue):
+    """Run one capture in an isolated process for HTTP server requests."""
+    global progressEventCallback
+
+    def progressCallback(payload):
+        try:
+            progressQueue.put(payload)
+        except Exception:
+            pass
+
+    try:
+        progressEventCallback = progressCallback
+        resultQueue.put({"result": runCaptureFromArgs(runArgs)})
+    except Exception as runError:
+        resultQueue.put({
+            "error": str(runError),
+            "traceback": traceback.format_exc(),
+        })
+    finally:
+        progressEventCallback = None
 
 
 def _buildBackendStatusPayload(server=None):
@@ -535,28 +549,29 @@ def _buildBackendStatusPayload(server=None):
     runtimeConfig = _getRuntimeConfigSnapshot()
 
     with processingJobLock:
-        jobId = processingJobInfo.get("jobId")
-        startedAtEpoch = processingJobInfo.get("startedAtEpoch")
-        pcapPath = processingJobInfo.get("pcapPath")
+        activeJobs = [dict(job) for job in processingJobs.values()]
         jobsProcessedSinceStart = int(backendJobsProcessedSinceStart)
-        processedPacketsNow = int(processingJobInfo.get("processedPackets") or 0)
-        totalPacketsNow = int(processingJobInfo.get("totalPackets") or 0)
+    activeJobs.sort(key=lambda job: float(job.get("startedAtEpoch") or 0))
+    currentJob = activeJobs[-1] if activeJobs else {}
+    processedPacketsNow = int(currentJob.get("processedPackets") or 0)
+    totalPacketsNow = int(currentJob.get("totalPackets") or 0)
 
     runningJobs = []
-    if processingLock.locked():
+    for job in activeJobs:
+        startedAtEpoch = job.get("startedAtEpoch")
         runningJobs.append(
             {
                 "name": "process",
-                "jobId": jobId,
-                "pcapPath": pcapPath,
+                "jobId": job.get("jobId"),
+                "pcapPath": job.get("pcapPath"),
                 "startedAt": datetime.utcfromtimestamp(startedAtEpoch).isoformat() + "Z"
                 if isinstance(startedAtEpoch, (int, float))
                 else None,
                 "elapsedSeconds": round(max(0.0, nowEpoch - float(startedAtEpoch)), 3)
                 if isinstance(startedAtEpoch, (int, float))
                 else None,
-                "processedPackets": processedPacketsNow,
-                "totalPackets": totalPacketsNow,
+                "processedPackets": int(job.get("processedPackets") or 0),
+                "totalPackets": int(job.get("totalPackets") or 0),
             }
         )
 
@@ -601,7 +616,7 @@ def _buildBackendStatusPayload(server=None):
         "uptimeSeconds": round(uptimeSeconds, 3),
         "runtime": {
             **runtimeConfig,
-            "processing": bool(processingLock.locked()),
+            "processing": bool(runningJobs),
             "stopRequested": bool(stopEvent.is_set()),
             "jobsProcessedSinceStart": jobsProcessedSinceStart,
             "processedPackets": processedPacketsNow,
@@ -4431,6 +4446,8 @@ def startThreading():
     handles work-stealing, so threads stay busy even if individual packets take different
     amounts of time (e.g. when active-recon network calls vary in latency).
     """
+    currentJobId = str(getattr(args, "job_id", "") or "").strip()
+
     # Always process when called; this function can be invoked from embedded/frozen contexts.argparse
     # Process all packets; packetLoop decides which protocols are handled.
     packetIndices = list(range(len(packets)))
@@ -4528,8 +4545,10 @@ def startThreading():
                     # the /status endpoint can report it even while the
                     # bridge's early-yield gate stops emitting snapshots.
                     with processingJobLock:
-                        processingJobInfo["processedPackets"] = processedPacketCount
-                        processingJobInfo["totalPackets"] = totalPackets
+                        activeJob = processingJobs.get(currentJobId)
+                        if activeJob is not None:
+                            activeJob["processedPackets"] = processedPacketCount
+                            activeJob["totalPackets"] = totalPackets
 
                     if processedPacketCount >= nextSnapshotPacketCount:
                         with allPacketInfoLock:
@@ -4970,6 +4989,7 @@ def runCaptureFromArgs(runArgs):
 
     needsOutputDir = not emitJsonSnapshots
     processingCancelled = False
+    finalCaptureData = None
     try:
         if needsOutputDir:
             if os.path.isdir(outputDir):
@@ -4989,6 +5009,7 @@ def runCaptureFromArgs(runArgs):
             finalPacketInfoSnapshot = list(allPacketInfo)
         if emitJsonSnapshots:
             captureData = buildHostsPayload(finalPacketInfoSnapshot, "")
+            finalCaptureData = captureData
             emitBridgeProgress(
                 "in-memory://hosts.json",
                 len(finalPacketInfoSnapshot),
@@ -5025,6 +5046,7 @@ def runCaptureFromArgs(runArgs):
         "outputDir": outputDir,
         "processedPackets": len(finalPacketInfoSnapshot),
         "totalPackets": totalPackets,
+        "captureData": finalCaptureData,
     }
 
 
@@ -5402,6 +5424,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global progressEventCallback
+        global backendJobsProcessedSinceStart
 
         if self.path == "/control":
             try:
@@ -5424,7 +5447,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                         {
                             "success": True,
                             "action": action,
-                            "processing": processingLock.locked(),
+                            "processing": bool(processingJobs),
                         },
                     )
                     return
@@ -5519,6 +5542,134 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 )
                 return
 
+        if self.path == "/pcap/write":
+            try:
+                request = self.parseJsonBody()
+            except Exception as error:
+                self.sendJson(400, {"success": False, "error": f"Invalid JSON body: {error}"})
+                return
+            if not isinstance(request, dict):
+                self.sendJson(400, {"success": False, "error": "Invalid JSON body"})
+                return
+
+            outputPath = str(request.get("outputPcap") or "").strip()
+            filterExpression = str(request.get("filter") or "").strip()
+            sourceRequests = request.get("sources")
+            if not outputPath:
+                self.sendJson(400, {"success": False, "error": "outputPcap is required"})
+                return
+            if not isinstance(sourceRequests, list) or not sourceRequests:
+                self.sendJson(400, {"success": False, "error": "sources must be a non-empty array"})
+                return
+
+            try:
+                entries = []
+                skippedSources = []
+                for sourceIndex, sourceRequest in enumerate(sourceRequests):
+                    if not isinstance(sourceRequest, dict):
+                        skippedSources.append({"index": sourceIndex, "reason": "invalid source"})
+                        continue
+                    inputPath = str(sourceRequest.get("inputPcap") or "").strip()
+                    sourceId = str(sourceRequest.get("sourceId") or f"source-{sourceIndex + 1}").strip()
+                    try:
+                        ordinal = int(sourceRequest.get("ordinal", sourceIndex))
+                    except (TypeError, ValueError):
+                        ordinal = sourceIndex
+                    selectedPacketIndexes = sourceRequest.get("packetIndexes")
+                    if isinstance(selectedPacketIndexes, list):
+                        selectedPacketIndexes = {
+                            int(index)
+                            for index in selectedPacketIndexes
+                            if isinstance(index, (int, float)) and int(index) >= 0
+                        }
+                    else:
+                        selectedPacketIndexes = None
+                    if not inputPath or not os.path.isfile(inputPath):
+                        skippedSources.append({
+                            "sourceId": sourceId,
+                            "reason": "input pcap not found",
+                        })
+                        continue
+
+                    packets = scapy.rdpcap(inputPath)
+                    if filterExpression and not isinstance(selectedPacketIndexes, set):
+                        # Apply the same display-filter expression to every source.
+                        # The JSON/session filter language is not a libpcap BPF
+                        # language, so use the backend's decoded packet fields.
+                        # A pcap export with a non-empty filter is intentionally
+                        # handled separately from the no-filter full export path.
+                        try:
+                            packets = scapy.sniff(offline=inputPath, filter=filterExpression)
+                        except Exception:
+                            raise ValueError(
+                                "PCAP export filters must be valid libpcap expressions "
+                                "when exporting directly from source pcaps"
+                            )
+
+                    for packetIndex, packet in enumerate(packets):
+                        if selectedPacketIndexes is not None and packetIndex not in selectedPacketIndexes:
+                            continue
+                        packetBytes = bytes(packet)
+                        digest = hashlib.sha256(packetBytes).hexdigest()[:24]
+                        timestamp = float(getattr(packet, "time", 0) or 0)
+                        entries.append({
+                            "packet": packet,
+                            "sourceId": sourceId,
+                            "ordinal": ordinal,
+                            "packetIndex": packetIndex,
+                            "digest": digest,
+                            "timestamp": timestamp,
+                        })
+
+                # A single source is preserved packet-for-packet. For merged
+                # sources, collapse byte-identical frames while retaining the
+                # first source/order occurrence. This is deliberately not TCP
+                # retransmission detection: identical frames from independently
+                # captured source pcaps are the false duplicates being removed.
+                isMultiSource = len(sourceRequests) > 1
+                totalEntryCount = len(entries)
+                if isMultiSource:
+                    entries.sort(key=lambda entry: (
+                        entry["timestamp"],
+                        entry["ordinal"],
+                        entry["packetIndex"],
+                        entry["digest"],
+                    ))
+                    digestSources = {}
+                    collapsedEntries = []
+                    for entry in entries:
+                        sourceIds = digestSources.setdefault(entry["digest"], set())
+                        if sourceIds and entry["sourceId"] not in sourceIds:
+                            continue
+                        sourceIds.add(entry["sourceId"])
+                        collapsedEntries.append(entry)
+                    entries = collapsedEntries
+
+                packetsToWrite = [entry["packet"] for entry in entries]
+                if not packetsToWrite and skippedSources and not totalEntryCount:
+                    self.sendJson(400, {
+                        "success": False,
+                        "error": "No readable packets were found in the supplied pcap sources",
+                        "skippedSources": skippedSources,
+                    })
+                    return
+                scapy.wrpcap(outputPath, packetsToWrite)
+                self.sendJson(200, {
+                    "success": True,
+                    "outputPcap": outputPath,
+                    "packetCount": len(packetsToWrite),
+                    "totalCount": totalEntryCount,
+                    "collapsedCount": totalEntryCount - len(packetsToWrite),
+                    "skippedSources": skippedSources,
+                })
+            except Exception as error:
+                self.sendJson(500, {
+                    "success": False,
+                    "error": str(error),
+                    "traceback": traceback.format_exc(),
+                })
+            return
+
         if self.path != "/process":
             self.sendJson(
                 404,
@@ -5591,64 +5742,49 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 wifi_keys=request.get("wifiKeys") if isinstance(request.get("wifiKeys"), list) else None,
             )
 
-            progressQueue = queue.Queue()
-            processingDone = threading.Event()
-            resultHolder = {}
-
-            def progressCallback(payload):
-                progressQueue.put(
-                    {
-                        "type": "progress",
-                        "jobId": str(payload.get("jobId") or runArgs.job_id),
-                        "path": payload.get("path"),
-                        "processedPackets": payload.get("processedPackets", 0),
-                        "totalPackets": payload.get("totalPackets", 0),
-                        "complete": bool(payload.get("complete", False)),
-                        "captureData": payload.get("captureData")
-                        if isinstance(payload.get("captureData"), dict)
-                        else None,
-                    }
-                )
-
-            def workerRunCapture():
-                global progressEventCallback
-                global backendJobsProcessedSinceStart
-                try:
-                    with processingLock:
-                        _setActiveProcessingJob(
-                            jobId=runArgs.job_id,
-                            pcapPath=runArgs.pcap_file,
-                        )
-                        previousProgressCallback = progressEventCallback
-                        progressEventCallback = progressCallback
-                        try:
-                            resultHolder["result"] = runCaptureFromArgs(runArgs)
-                        finally:
-                            with processingJobLock:
-                                backendJobsProcessedSinceStart += 1
-                            progressEventCallback = previousProgressCallback
-                            _clearActiveProcessingJob()
-                except Exception as runError:
-                    resultHolder["error"] = runError
-                    resultHolder["traceback"] = traceback.format_exc()
-                finally:
-                    processingDone.set()
-
-            workerThread = threading.Thread(target=workerRunCapture, daemon=True)
-            workerThread.start()
+            multiprocessingContext = multiprocessing.get_context("spawn")
+            progressQueue = multiprocessingContext.Queue()
+            resultQueue = multiprocessingContext.Queue()
+            _setActiveProcessingJob(jobId=runArgs.job_id, pcapPath=runArgs.pcap_file)
+            workerProcess = multiprocessingContext.Process(
+                target=_runCaptureInProcess,
+                args=(runArgs, progressQueue, resultQueue),
+                daemon=True,
+            )
+            workerProcess.start()
 
             self.beginNdjsonStream(200)
 
             while True:
-                if processingDone.is_set() and progressQueue.empty():
+                if not workerProcess.is_alive() and progressQueue.empty():
                     break
                 try:
                     progressEvent = progressQueue.get(timeout=0.2)
                 except queue.Empty:
                     continue
-                self.sendNdjsonLine(progressEvent)
+                progressEventPayload = {
+                    "type": "progress",
+                    "jobId": str(progressEvent.get("jobId") or runArgs.job_id),
+                    "path": progressEvent.get("path"),
+                    "processedPackets": progressEvent.get("processedPackets", 0),
+                    "totalPackets": progressEvent.get("totalPackets", 0),
+                    "complete": bool(progressEvent.get("complete", False)),
+                    "captureData": progressEvent.get("captureData")
+                    if isinstance(progressEvent.get("captureData"), dict)
+                    else None,
+                }
+                with processingJobLock:
+                    activeJob = processingJobs.get(str(runArgs.job_id))
+                    if activeJob is not None:
+                        activeJob["processedPackets"] = progressEventPayload["processedPackets"]
+                        activeJob["totalPackets"] = progressEventPayload["totalPackets"]
+                self.sendNdjsonLine(progressEventPayload)
 
-            workerThread.join(timeout=0.1)
+            workerProcess.join(timeout=1)
+            resultHolder = resultQueue.get() if not resultQueue.empty() else {}
+            with processingJobLock:
+                backendJobsProcessedSinceStart += 1
+            _clearActiveProcessingJob(runArgs.job_id)
 
             if "error" in resultHolder:
                 self.sendNdjsonLine(
@@ -5673,6 +5809,9 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     "stdout": "",
                     "processedPackets": int(result.get("processedPackets") or 0),
                     "totalPackets": int(result.get("totalPackets") or 0),
+                    "captureData": result.get("captureData")
+                    if isinstance(result.get("captureData"), dict)
+                    else None,
                 }
             )
         except Exception as requestError:
