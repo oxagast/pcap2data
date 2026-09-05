@@ -3829,6 +3829,14 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     http2Section = dec_http2.decodeHTTP2(rawPayload)
                     if http2Section is not None:
                         transportSection["HTTP2"] = http2Section
+                # Decode gRPC envelopes carried inside HTTP/2 DATA frames on
+                # the conventional TCP/50051 service port.
+                if streamLabelPort == 50051 or srcPort == 50051 or dstPort == 50051:
+                    grpcSection = dec_grpc.decodeGRPCFromHTTP2(rawPayload)
+                    if grpcSection is None:
+                        grpcSection = dec_grpc.decodeGRPC(rawPayload)
+                    if grpcSection is not None:
+                        transportSection["gRPC"] = grpcSection
                 # Decode FTP on TCP ports 20/21
                 if streamLabelPort in (20, 21) or srcPort in (20, 21):
                     ftpSection = dec_ftp.decodeFTP(rawPayload)
@@ -4098,14 +4106,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                         transportSection["SSDP"] = ssdpSection
                         if ssdpSection.get("UPnP"):
                             transportSection["UPnP"] = ssdpSection
-                # Decode raw gRPC envelopes on the conventional TCP port.
-                # gRPC is normally carried inside HTTP/2 DATA frames; when
-                # the stream payload has already been reassembled, the
-                # decoder consumes the concatenated 5-byte gRPC envelopes.
-                if streamLabelPort == 50051 or srcPort == 50051 or dstPort == 50051:
-                    grpcSection = dec_grpc.decodeGRPC(rawPayload)
-                    if grpcSection is not None:
-                        transportSection["gRPC"] = grpcSection
                 # Decode SNMP on UDP ports 161/162
                 if dstPort in (161, 162) or srcPort in (161, 162):
                     snmpSection = dec_snmp.decodeSNMP(p)
