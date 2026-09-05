@@ -4322,6 +4322,7 @@ function renderStatsAnomaliesPanel({
   documentRef,
   anomalies,
   applyStatsQuery,
+  crossCaptureAnomalies = [],
 }) {
   if (!documentRef || typeof documentRef.createElement !== "function") {
     return null;
@@ -4331,7 +4332,9 @@ function renderStatsAnomaliesPanel({
 
   const summary = documentRef.createElement("div");
   summary.className = "stats-anomalies-summary";
-  if (!anomalies || anomalies.totalCount === 0) {
+  const crossCaptureCount = Array.isArray(crossCaptureAnomalies) ? crossCaptureAnomalies.length : 0;
+  const totalCount = Number(anomalies?.totalCount || 0) + crossCaptureCount;
+  if (totalCount === 0) {
     summary.textContent = "No anomalies detected. The capture looks in-character for every protocol observed.";
   } else {
     const breakdown = [];
@@ -4340,11 +4343,13 @@ function renderStatsAnomaliesPanel({
     if (anomalies.bruteForce.length) breakdown.push(`${anomalies.bruteForce.length} brute force`);
     if (anomalies.baselineOutliers.length) breakdown.push(`${anomalies.baselineOutliers.length} baseline`);
     if (anomalies.embeddedContent.length) breakdown.push(`${anomalies.embeddedContent.length} embedded content`);
-    summary.textContent = `${anomalies.totalCount} anomalies detected — ${breakdown.join(", ")}.`;
+    if (crossCaptureCount) breakdown.push(`${crossCaptureCount} cross-capture`);
+    summary.textContent = `${totalCount} anomalies detected — ${breakdown.join(", ")}.`;
   }
   host.appendChild(summary);
 
   const sections = [
+    { title: "Cross-Capture Anomalies", items: crossCaptureAnomalies },
     { title: "Protocol Anomalies (DNS tunneling, beaconing, non-standard ports, …)", items: anomalies?.protocolAnomalies || [] },
     { title: "Port Scans", items: anomalies?.portscans || [] },
     { title: "Brute-Force Logins", items: anomalies?.bruteForce || [] },
