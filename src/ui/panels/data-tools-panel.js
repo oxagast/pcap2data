@@ -1880,6 +1880,63 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
   let hiddenCount = 0;
   const totalCount = packets.length;
   const hideNoOp = convDecodesHideNoOp === true;
+
+    // gRPC over HTTP/2 is a stream protocol: HTTP/2 control frames, DATA
+    // frames, and the 5-byte gRPC envelopes routinely span multiple captured
+    // TCP packets. Decode the reassembled stream once instead of asking the
+    // envelope decoder to parse each TCP segment independently. The regular
+    // per-packet stack remains appropriate for message-oriented protocols.
+    if (resolvedProtocol === "grpc" && totalCount > 0) {
+      const streamByteLength = packets.reduce((total, packet) => {
+        return total + (packet?.bytes instanceof Uint8Array ? packet.bytes.length : 0);
+      }, 0);
+      const streamBytes = new Uint8Array(streamByteLength);
+      let streamOffset = 0;
+      packets.forEach((packet) => {
+        if (!(packet?.bytes instanceof Uint8Array)) return;
+        streamBytes.set(packet.bytes, streamOffset);
+        streamOffset += packet.bytes.length;
+      });
+      const streamResult = decodeWithSelectedProtocol(streamBytes, "grpc");
+      if (streamResult) {
+        const streamBlock = document.createElement("div");
+        streamBlock.className = "data-tools-proto-stream-block";
+        const streamHeader = document.createElement("div");
+        streamHeader.className = "data-tools-proto-stream-header";
+        streamHeader.textContent = `gRPC stream (${totalCount} packets, ${streamByteLength} bytes)`;
+        streamBlock.appendChild(streamHeader);
+        appendStreamPacketBlock(
+          protoOutput,
+          streamBlock,
+          streamResult,
+          selectedProtocol,
+          resolvedProtocol,
+          "Reassembled HTTP/2 stream",
+        );
+        firstSuccessfulResult = streamResult;
+        renderedCount = 1;
+      }
+      if (hideNoOp && renderedCount === 0) hiddenCount = totalCount;
+    }
+
+    if (resolvedProtocol === "grpc" && renderedCount > 0) {
+      if (hideNoOp) {
+        const hiddenNote = document.createElement("span");
+        hiddenNote.className = "data-tools-proto-stream-summary-hidden";
+        hiddenNote.textContent = ` (${renderedCount} reassembled stream shown, ${hiddenCount} packet segments represented)`;
+        summary.appendChild(hiddenNote);
+      }
+      activeDataToolsProtoResult = firstSuccessfulResult;
+      protoOutput.dataset.decodedResult = JSON.stringify({
+        protocol: firstSuccessfulResult.protocol,
+        fields: Array.isArray(firstSuccessfulResult.fields) ? firstSuccessfulResult.fields : [],
+      });
+      if (options && options.requestSummary && activeConvSubtab === CONV_DECODES_SUBTAB) {
+        requestDataToolsBackgroundSummary(CONV_DECODES_SUBTAB);
+      }
+      return;
+    }
+
   for (let reverseIndex = 0; reverseIndex < totalCount; reverseIndex += 1) {
     const packetIndex = totalCount - 1 - reverseIndex;
     const entry = packets[packetIndex] || {};

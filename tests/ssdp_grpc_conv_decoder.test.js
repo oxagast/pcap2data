@@ -33,6 +33,26 @@ describe("SSDP / UPnP and gRPC Conv decoders", () => {
         ]));
     });
 
+    test("decodes gRPC envelopes extracted from multiple HTTP/2 DATA frames", () => {
+        const envelopeOne = Uint8Array.from([0x00, 0x00, 0x00, 0x00, 0x03, 0x0a, 0x01, 0x78]);
+        const envelopeTwo = Uint8Array.from([0x00, 0x00, 0x00, 0x00, 0x03, 0x0a, 0x01, 0x79]);
+        const frame = (payload) => Uint8Array.from([
+            0x00, 0x00, payload.length,
+            0x00, 0x00,
+            0x00, 0x00, 0x00, 0x03,
+            ...payload,
+        ]);
+        const first = frame(envelopeOne);
+        const second = frame(envelopeTwo);
+        const bytes = Uint8Array.from([...first, ...second]);
+        const decoded = conv.decodeGrpcFromBytes(bytes);
+        expect(decoded).not.toBeNull();
+        expect(decoded.fields).toEqual(expect.arrayContaining([
+            { name: "Message 1 Length", value: "3" },
+            { name: "Message 2 Length", value: "3" },
+        ]));
+    });
+
     test("rejects malformed gRPC envelopes", () => {
         expect(conv.decodeGrpcFromBytes(Uint8Array.from([0, 0, 0, 0, 4, 1]))).toBeNull();
         expect(conv.decodeGrpcFromBytes(new Uint8Array())).toBeNull();
