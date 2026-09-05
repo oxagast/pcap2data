@@ -1001,6 +1001,9 @@ const PACKET_STUB_INDEX_MAX = 200000;
 let notesPanelInitialized = false;
 let notesWorkspaceFragmentPromise = null;
 const filterInputEl = getCachedElement("filterStr");
+function getFilterInputValue() {
+  return typeof filterInputEl?.value === "string" ? filterInputEl.value : "";
+}
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
 const filterHistorySelectEl = getCachedElement("filter-history-select");
@@ -17549,6 +17552,7 @@ const convertContextButtons = {
   saveJson: getCachedElement("ctx-save-json"),
   exportPacket: getCachedElement("ctx-export-packet"),
   exportPayload: getCachedElement("ctx-export-payload"),
+  exportFilteredPcap: getCachedElement("ctx-export-filtered-pcap"),
   exportConvInput: getCachedElement("ctx-export-conv-input"),
   exportConvRaw: getCachedElement("ctx-export-conv-raw"),
   exportConvHex: getCachedElement("ctx-export-conv-hex"),
@@ -18691,6 +18695,16 @@ async function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.exportPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
+  let hasPcapSource = false;
+  try {
+    const sourceResult = await window.captureapi?.getSourcePaths?.();
+    hasPcapSource = Boolean(sourceResult?.success && sourceResult.sources?.some((source) => source.sourcePath));
+  } catch (_error) {
+    hasPcapSource = false;
+  }
+  convertContextButtons.exportFilteredPcap.style.display = hasPcapSource
     ? "block"
     : "none";
   convertContextButtons.exportConvInput.style.display = hasConvInputToExport
@@ -25809,6 +25823,39 @@ function exportCurrentPayloadFromContextMenu() {
   });
 }
 
+// Exports all packets represented by the current capture store. A non-empty
+// display filter selects matching packet indexes; an empty filter keeps every
+// source packet and lets the backend collapse only cross-source byte duplicates.
+async function exportFilteredPcapFromContextMenu() {
+  hideConvertContextMenu();
+  const filter = getFilterInputValue().trim();
+  const saveResult = await window.saveapi?.choosePcapPath?.();
+  if (!saveResult) {
+    statusUpdate("Status: PCAP export is unavailable in this build");
+    return;
+  }
+  if (saveResult?.canceled || !saveResult?.filePath) {
+    statusUpdate("Status: Export cancelled");
+    return;
+  }
+  const exportResult = await window.captureapi?.exportFilteredPcap?.({
+    outputPcap: saveResult.filePath,
+    filter,
+  });
+  if (exportResult?.success) {
+    const collapseSuffix = exportResult.collapsedCount
+      ? ` (${exportResult.collapsedCount} cross-source duplicate packets collapsed)`
+      : "";
+    statusUpdate(`Status: PCAP exported successfully — ${exportResult.packetCount} packets${collapseSuffix}`);
+    writeLogEntry(`Context menu PCAP export completed packets=${exportResult.packetCount}`);
+    return;
+  }
+  const errorMessage = exportResult?.error || "unknown error";
+  doError("PCAP export failed");
+  logErrorEntry("export-pcap", errorMessage);
+  statusUpdate(`Status: PCAP export failed – ${errorMessage}`);
+}
+
 // Returns whether likely printable utf8.
 function isLikelyPrintableUtf8(value) {
   return /^[\x09\x0A\x0D\x20-\x7E]*$/.test(String(value || ""));
@@ -28417,6 +28464,10 @@ convertContextButtons.exportPacket.addEventListener(
 convertContextButtons.exportPayload.addEventListener(
   "click",
   exportCurrentPayloadFromContextMenu,
+);
+convertContextButtons.exportFilteredPcap.addEventListener(
+  "click",
+  exportFilteredPcapFromContextMenu,
 );
 convertContextButtons.exportConvInput.addEventListener("click", () => {
   exportConvContextTextFromContextMenu("input");
