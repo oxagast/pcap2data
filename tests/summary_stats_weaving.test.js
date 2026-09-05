@@ -162,6 +162,7 @@ const helperSource = [
     loadFunction('truncateStatsList'),
     loadFunction('buildStatsMarkdownTable'),
     loadFunction('buildStatsMarkdownSection'),
+    loadFunction('buildMultiCaptureSummaryNotice'),
     loadFunction('getNotesSummarySection'),
     loadFunction('isNoteConcrete'),
     loadFunction('getCurrentSummaryReportMarkdown'),
@@ -176,6 +177,7 @@ function runInFreshContext({ capturedPackets, stats, bookmarkList = [], extraCon
                 capturedPackets === undefined ? makeCapturedPacketsStub() : capturedPackets,
             bookmarkList: Array.isArray(bookmarkList) ? bookmarkList : [],
             buildCaptureStats,
+            getCaptureSources: () => [],
             writeLogEntry: () => { },
             // The Notes <-> Summary integration reads `notesList` directly
             // out of the VM context. Older tests in this file don't
@@ -327,6 +329,33 @@ describe('summary stats weaving', () => {
         });
     });
 
+    describe('buildMultiCaptureSummaryNotice', () => {
+        test('returns no notice for a single capture', () => {
+            const { context } = runInFreshContext({
+                extraContext: {
+                    getCaptureSources: () => [{ sourceId: 'one', sourceName: 'one.pcap' }],
+                },
+            });
+            expect(context.buildMultiCaptureSummaryNotice()).toBe('');
+        });
+
+        test('describes multiple capture sources before analysis', () => {
+            const { context } = runInFreshContext({
+                extraContext: {
+                    getCaptureSources: () => [
+                        { sourceId: 'one', sourceName: 'one.pcap' },
+                        { sourceId: 'two', sourceName: 'two.pcap' },
+                    ],
+                },
+            });
+            const notice = context.buildMultiCaptureSummaryNotice();
+            expect(notice).toContain('2 separate capture sources');
+            expect(notice).toContain('one.pcap');
+            expect(notice).toContain('two.pcap');
+            expect(notice.toLowerCase()).toContain('distinct captures');
+        });
+    });
+
     describe('getSummaryMarkdownForExport', () => {
         test('appends the stats section after the LLM summary', () => {
             const stats = makeStatsStub();
@@ -417,6 +446,7 @@ describe('summary stats weaving', () => {
             expect(body.toLowerCase()).toContain('weave');
             // The keystore summary should also be wired in.
             expect(body).toContain('getLatestKeystoreSummary');
+            expect(body).toContain('prependMultiCaptureSummaryNotice');
         });
 
         test('runAnalysisCompaction includes the stats context in its prompt', () => {
@@ -432,6 +462,7 @@ describe('summary stats weaving', () => {
             expect(body.toLowerCase()).toContain('weave');
             // The keystore summary should also be wired in.
             expect(body).toContain('getLatestKeystoreSummary');
+            expect(body).toContain('prependMultiCaptureSummaryNotice');
         });
 
         test('runAnalysisCompaction places the capture overview before the blurbs', () => {

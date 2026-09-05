@@ -198,6 +198,12 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
   const networkData = getNetworkData(packetItem);
 
   switch (normalizedKey) {
+    case 'source':
+    case 'capture-source':
+    case 'capture-source-id':
+      return packetInfo['capture.sourceId'] ?? packetInfo['capture.sourceSession'];
+    case 'capture-source-session':
+      return packetInfo['capture.sourceSession'] ?? packetInfo['capture.sourceId'];
     case 'transport-proto': {
       const explicitTransport = searchFullKey(packetItem, 'transport.proto');
       if (

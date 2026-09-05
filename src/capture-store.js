@@ -13,6 +13,24 @@ const PACKET_KEY_SEPARATOR = "$";
 
 let activeStore = null;
 
+function parseListTimestampMs(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const match = value.trim().match(
+        /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:\s*(Z|[+-]\d{2}:?\d{2}))?$/,
+    );
+    if (match) {
+        const [, year, month, day, hour, minute, second, fraction = "", zone] = match;
+        const base = zone
+            ? Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}${zone === "Z" ? "Z" : zone}`)
+            : new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), 0).getTime();
+        if (Number.isFinite(base)) {
+            return base + Number(`0.${fraction.slice(0, 6).padEnd(6, "0")}`) * 1000;
+        }
+    }
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
 function isObject(value) {
     return Boolean(value) && typeof value === "object";
 }
@@ -114,6 +132,15 @@ function isFinalSummaryPath(pathKeys) {
 
 function isSessionStatePath(pathKeys) {
     return pathKeys.length === 1 && pathKeys[0] === "session.state";
+}
+
+function isCaptureMetadataPath(pathKeys) {
+    return (
+        (pathKeys.length === 1 && pathKeys[0] === "capture.metadata") ||
+        (pathKeys.length === 2 &&
+            pathKeys[0] === "capture.data" &&
+            pathKeys[1] === "capture.metadata")
+    );
 }
 
 function derivePacketKey(packet, host, hostPacketIndex, existingKeys) {
@@ -401,6 +428,16 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
     const streamKey = `${transportName}|${firstEndpoint}|${secondEndpoint}`;
     const appProtocol = inferApplicationProtocol(packetInfo, extraInfo, transportName, transportData);
     const packetProcessed = Number(packetInfo?.["packet.processed"]);
+    const timestamp = typeof packetInfo?.["packet.timestamp"] === "string"
+        ? packetInfo["packet.timestamp"]
+        : typeof packetInfo?.["Packet Timestamp"] === "string"
+            ? packetInfo["Packet Timestamp"]
+            : "";
+    const adjustedTimestampMs = Number(packetInfo?.["capture.adjustedTimestampMs"]);
+    const parsedTimestampMs = parseListTimestampMs(timestamp);
+    const timestampMs = Number.isFinite(adjustedTimestampMs)
+        ? adjustedTimestampMs
+        : parsedTimestampMs;
 
     return {
         packetKey,
@@ -408,6 +445,8 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
         pktIdx: hostPacketIndex,
         idx: Number(packetInfo?.["index"]) || hostPacketIndex,
         pcapOrder: Number.isFinite(packetProcessed) ? packetProcessed + 1 : Number(packetInfo?.["index"]) || hostPacketIndex,
+        timestamp,
+        timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
         srcIp: sourceIp,
         dstIp: destinationIp,
         srcPort: sourcePort,
@@ -416,6 +455,12 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
         appProto: String(appProtocol),
         payloadLength: Number(packetInfo?.["raw.data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]) || 0,
         streamKey,
+        sourceId: typeof packetInfo?.["capture.sourceId"] === "string"
+            ? packetInfo["capture.sourceId"]
+            : "",
+        sourceName: typeof packetInfo?.["capture.sourceSession"] === "string"
+            ? packetInfo["capture.sourceSession"]
+            : "",
     };
 }
 
@@ -516,6 +561,9 @@ async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = n
     const refsByKey = new Map();
     const hostPackets = new Map();
     const listEntries = [];
+    const captureMetadata = isObject(normalizedCaptureData["capture.metadata"])
+        ? normalizedCaptureData["capture.metadata"]
+        : null;
 
     Object.keys(hostMap).forEach((host) => {
         const sourcePackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
@@ -565,6 +613,7 @@ async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = n
             host: hostObject,
             listEntries,
             "final.summary": finalSummary,
+            ...(captureMetadata ? { "capture.metadata": captureMetadata } : {}),
         },
         sessionState,
     };
@@ -581,6 +630,7 @@ async function buildStoreFromSource(sourcePath) {
     const hostPackets = new Map();
     const listEntries = [];
     let finalSummary = "";
+    let captureMetadata = null;
     let sessionState = null;
     let writeOffset = 0;
 
@@ -595,6 +645,11 @@ async function buildStoreFromSource(sourcePath) {
 
         if (isSessionStatePath(pathKeys) && isObject(value)) {
             sessionState = value;
+            return;
+        }
+
+        if (isCaptureMetadataPath(pathKeys) && isObject(value)) {
+            captureMetadata = value;
             return;
         }
 
@@ -659,6 +714,7 @@ async function buildStoreFromSource(sourcePath) {
             host: hostObject,
             listEntries,
             "final.summary": finalSummary,
+            ...(captureMetadata ? { "capture.metadata": captureMetadata } : {}),
         },
         sessionState,
     };
@@ -696,6 +752,7 @@ async function buildStoreFromJsonText(jsonText) {
     const hostPackets = new Map();
     const listEntries = [];
     let finalSummary = "";
+    let captureMetadata = null;
     let sessionState = null;
     let writeOffset = 0;
 
@@ -710,6 +767,11 @@ async function buildStoreFromJsonText(jsonText) {
 
         if (isSessionStatePath(pathKeys) && isObject(value)) {
             sessionState = value;
+            return;
+        }
+
+        if (isCaptureMetadataPath(pathKeys) && isObject(value)) {
+            captureMetadata = value;
             return;
         }
 
@@ -769,6 +831,7 @@ async function buildStoreFromJsonText(jsonText) {
             host: hostObject,
             listEntries,
             "final.summary": finalSummary,
+            ...(captureMetadata ? { "capture.metadata": captureMetadata } : {}),
         },
         sessionState,
     };
@@ -873,6 +936,9 @@ async function buildMaterializedCaptureData() {
     return {
         host: hostObject,
         "final.summary": store.captureData?.["final.summary"] || "",
+        ...(store.captureData?.["capture.metadata"]
+            ? { "capture.metadata": store.captureData["capture.metadata"] }
+            : {}),
     };
 }
 

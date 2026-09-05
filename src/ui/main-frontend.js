@@ -357,6 +357,8 @@ const validKeyByLower = new Map();
 const filterKeyUsageCounts = new Map();
 const filterValueUsageCacheByKey = new Map();
 const filterValueUsageInFlightByKey = new Map();
+const LOCAL_FILTER_KEYS = ["source", "capture.sourceId", "capture.sourceSession"];
+const LOCAL_FILTER_KEY_ALIASES = new Set(LOCAL_FILTER_KEYS.map((key) => key.toLowerCase().replace(/[._\s-]+/g, "-")));
 const FILTER_AUTOCOMPLETE_MAX_SUGGESTIONS = 8;
 let filterAutocompleteCacheVersion = -1;
 if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function") {
@@ -371,6 +373,12 @@ if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function
     validKeyByLower.clear();
     validKeysCache.forEach((key) => {
       validKeyByLower.set(key.toLowerCase(), key);
+    });
+    LOCAL_FILTER_KEYS.forEach((key) => {
+      if (!validKeyByLower.has(key.toLowerCase())) {
+        validKeysCache.push(key);
+        validKeyByLower.set(key.toLowerCase(), key);
+      }
     });
     void refreshFilterAutocompleteOptions();
   });
@@ -390,7 +398,11 @@ function ensureFilterAutocompleteCachesFresh() {
 function canonicalFilterKey(filterKey) {
   const normalized = String(filterKey || "").trim().toLowerCase();
   if (!normalized) return null;
-  return validKeyByLower.get(normalized) || null;
+  return validKeyByLower.get(normalized) || (
+    LOCAL_FILTER_KEY_ALIASES.has(normalized.replace(/[._\s-]+/g, "-"))
+      ? String(filterKey).trim()
+      : null
+  );
 }
 
 function extractFilterKeysFromQuery(rawQuery) {
@@ -1051,6 +1063,129 @@ const VALID_CRYPT_SUBTABS = [
 ];
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_HASHES_SUBTAB;
+let activeStatsSubtab = "statistics";
+let sourceViewState = {};
+let sourceViewStateVersion = 0;
+let sourceColorAssignments = {};
+
+function getCaptureSourceId(packet) {
+  const sourceId = packet?.["packet.info"]?.["capture.sourceId"];
+  return typeof sourceId === "string" ? sourceId.trim() : "";
+}
+
+function getCaptureSourceState() {
+  return sourceViewState;
+}
+
+function getSourceColorForList(sourceId) {
+  if (getCurrentSettings()?.merge?.sourceColorCodingEnabled === false) return "";
+  const palette = getCurrentSettings()?.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors;
+  const assigned = sourceColorAssignments[sourceId];
+  return assigned || palette[0] || "";
+}
+
+function remapSourceColorsForPaletteChange(previousPalette, nextPalette) {
+  const oldPalette = Array.isArray(previousPalette) && previousPalette.length > 0
+    ? previousPalette
+    : DEFAULT_SETTINGS.merge.sourceColors;
+  const newPalette = Array.isArray(nextPalette) && nextPalette.length > 0
+    ? nextPalette
+    : DEFAULT_SETTINGS.merge.sourceColors;
+  if (JSON.stringify(oldPalette) === JSON.stringify(newPalette)) return;
+
+  sourceColorAssignments = Object.fromEntries(
+    Object.entries(sourceColorAssignments).map(([sourceId, assignedColor], sourceIndex) => {
+      const oldIndex = oldPalette.indexOf(assignedColor);
+      const paletteIndex = oldIndex >= 0 ? oldIndex : sourceIndex;
+      return [sourceId, newPalette[paletteIndex % newPalette.length]];
+    }),
+  );
+}
+
+function shuffleValues(values) {
+  const shuffled = [...values];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function assignNewSessionSourceColors(captureData) {
+  const palette = getCurrentSettings()?.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors;
+  const sourceIds = new Set();
+  Object.values(captureData?.host || {}).forEach((packets) => {
+    (Array.isArray(packets) ? packets : []).forEach((packet) => {
+      const sourceId = getCaptureSourceId(packet);
+      if (sourceId) sourceIds.add(sourceId);
+    });
+  });
+  const colors = shuffleValues(palette);
+  sourceColorAssignments = {};
+  [...sourceIds].forEach((sourceId, index) => {
+    sourceColorAssignments[sourceId] = colors[index % colors.length];
+  });
+}
+
+function updateCaptureSourceState(sourceId, patch = {}) {
+  const normalizedId = String(sourceId || "").trim();
+  if (!normalizedId) return;
+  const { color, colorEnabled, ...sourcePatch } = patch;
+  sourceViewState = {
+    ...sourceViewState,
+    [normalizedId]: {
+      ...(sourceViewState[normalizedId] || {}),
+      ...sourcePatch,
+    },
+  };
+  sourceViewStateVersion += 1;
+  bumpPacketNavigationCacheVersion();
+  if (activeMainTab === MAIN_TAB_STATS && Object.prototype.hasOwnProperty.call(patch, "visible")) {
+    showStats({ openSubtab: "sources" });
+  }
+  if (activeMainTab === MAIN_TAB_LIST) showPacketList();
+}
+
+function isCaptureSourceVisible(packet) {
+  const sourceId = getCaptureSourceId(packet);
+  return !sourceId || sourceViewState[sourceId]?.visible !== false;
+}
+
+function getVisibleCapturedPackets() {
+  if (!capturedPackets || typeof capturedPackets !== "object") return capturedPackets;
+  const host = {};
+  Object.entries(capturedPackets.host || {}).forEach(([hostName, packets]) => {
+    host[hostName] = Array.isArray(packets)
+      ? packets.filter((packet) => isCaptureSourceVisible(packet))
+      : packets;
+  });
+  return { ...capturedPackets, host };
+}
+
+function hasHiddenCaptureSources() {
+  return Object.values(sourceViewState).some((entry) => entry?.visible === false);
+}
+
+function restoreCaptureSourceState(sessionState) {
+  sourceViewState = sessionState?.sourceViewState && typeof sessionState.sourceViewState === "object"
+    ? JSON.parse(JSON.stringify(sessionState.sourceViewState))
+    : {};
+  const savedAssignments = sessionState?.sourceColorAssignments;
+  if (savedAssignments && typeof savedAssignments === "object") {
+    sourceColorAssignments = Object.fromEntries(
+      Object.entries(savedAssignments)
+        .filter(([, color]) => /^#[0-9a-f]{6}$/i.test(color))
+        .map(([sourceId, color]) => [sourceId, color]),
+    );
+  } else if (Object.keys(sourceColorAssignments).length === 0) {
+    sourceColorAssignments = Object.fromEntries(
+      Object.entries(sourceViewState)
+        .filter(([, value]) => /^#[0-9a-f]{6}$/i.test(value?.color || ""))
+        .map(([sourceId, value]) => [sourceId, value.color]),
+    );
+  }
+  sourceViewStateVersion += 1;
+}
 
 // Resolves the user's preferred landing tab from settings, falling
 // back to the default if the persisted value is missing or unknown.
@@ -1144,6 +1279,7 @@ const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_API_KEYS = "api-keys";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
+const SETTINGS_SUBTAB_MERGE = "merge";
 const SETTINGS_SUBTAB_PLUGINS = "plugins";
 const SETTINGS_SUBTAB_THEMES = "themes";
 const SETTINGS_SUBTAB_PRIVACY = "privacy";
@@ -4612,6 +4748,22 @@ function renderAccountManageSection() {
 // Syncs settings form from state.
 function syncSettingsFormFromState() {
   const settings = getCurrentSettings();
+  const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
+  const mergeColorsEl = document.getElementById("settings-merge-source-colors");
+  if (mergeColorCodingEl) mergeColorCodingEl.checked = settings.merge?.sourceColorCodingEnabled !== false;
+  if (mergeColorsEl) {
+    mergeColorsEl.replaceChildren();
+    (settings.merge?.sourceColors || []).forEach((color, index) => {
+      const label = document.createElement("label");
+      label.textContent = `Source ${String.fromCharCode(65 + index)}`;
+      const input = document.createElement("input");
+      input.type = "color";
+      input.value = color;
+      input.dataset.mergeColorIndex = String(index);
+      label.appendChild(input);
+      mergeColorsEl.appendChild(label);
+    });
+  }
   const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
@@ -5173,6 +5325,8 @@ function readSettingsFormState() {
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
   const trimmedOpenRouterApiKey = openrouterApiKeyEl ? openrouterApiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
+  const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
+  const mergeColorInputs = Array.from(document.querySelectorAll("#settings-merge-source-colors input[type=\"color\"]"));
   return normalizeSettings({
     general: {
       themeId: themeSelectEl
@@ -5262,6 +5416,14 @@ function readSettingsFormState() {
       mapProjectionOffsetY: mapProjectionOffsetYEl
         ? mapProjectionOffsetYEl.value
         : DEFAULT_SETTINGS.debug.mapProjectionOffsetY,
+    },
+    merge: {
+      sourceColorCodingEnabled: mergeColorCodingEl
+        ? mergeColorCodingEl.checked
+        : currentSettings.merge?.sourceColorCodingEnabled !== false,
+      sourceColors: mergeColorInputs.length > 0
+        ? mergeColorInputs.map((input) => input.value)
+        : [...(currentSettings.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors)],
     },
     llm: {
       provider: llmProviderDropdown.getValue(),
@@ -6162,7 +6324,15 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
     invalidateHashesComDiagnosticsCache();
   }
   const savedSettings = await window.settingsapi.save(nextSettings);
+  remapSourceColorsForPaletteChange(
+    previousSettings?.merge?.sourceColors,
+    savedSettings?.merge?.sourceColors,
+  );
   setCurrentSettings(savedSettings);
+  if (previousSettings?.merge?.sourceColorCodingEnabled !== savedSettings?.merge?.sourceColorCodingEnabled
+    || JSON.stringify(previousSettings?.merge?.sourceColors) !== JSON.stringify(savedSettings?.merge?.sourceColors)) {
+    if (activeMainTab === MAIN_TAB_LIST) showPacketList();
+  }
   syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(savedSettings);
   // Re-evaluate provider-agnostic LLM availability from the freshly
@@ -6355,7 +6525,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
             ? SETTINGS_SUBTAB_BACKEND
             : tabName === SETTINGS_SUBTAB_DEBUG
               ? SETTINGS_SUBTAB_DEBUG
-              : tabName === SETTINGS_SUBTAB_PLUGINS
+                : tabName === SETTINGS_SUBTAB_MERGE
+                  ? SETTINGS_SUBTAB_MERGE
+                  : tabName === SETTINGS_SUBTAB_PLUGINS
                 ? SETTINGS_SUBTAB_PLUGINS
                 : tabName === SETTINGS_SUBTAB_THEMES
                   ? SETTINGS_SUBTAB_THEMES
@@ -6372,6 +6544,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   const apiKeysBtn = document.getElementById("settings-subtab-api-keys");
   const backendBtn = document.getElementById("settings-subtab-backend");
   const debugBtn = document.getElementById("settings-subtab-debug");
+  const mergeBtn = document.getElementById("settings-subtab-merge");
   const pluginsBtn = document.getElementById("settings-subtab-plugins");
   const themesBtn = document.getElementById("settings-subtab-themes");
   const privacyBtn = document.getElementById("settings-subtab-privacy");
@@ -6382,6 +6555,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   const apiKeysPanel = document.getElementById("settings-api-keys-panel");
   const backendPanel = document.getElementById("settings-backend-panel");
   const debugPanel = document.getElementById("settings-debug-panel");
+  const mergePanel = document.getElementById("settings-merge-panel");
   const pluginsPanel = document.getElementById("settings-plugins-panel");
   const themesPanel = document.getElementById("settings-themes-panel");
   const privacyPanel = document.getElementById("settings-privacy-panel");
@@ -6403,6 +6577,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   }
   if (debugBtn) {
     debugBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_DEBUG);
+  }
+  if (mergeBtn) {
+    mergeBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_MERGE);
   }
   if (pluginsBtn) {
     pluginsBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_PLUGINS);
@@ -6445,6 +6622,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   }
   if (debugPanel) {
     debugPanel.hidden = nextTab !== SETTINGS_SUBTAB_DEBUG;
+  }
+  if (mergePanel) {
+    mergePanel.hidden = nextTab !== SETTINGS_SUBTAB_MERGE;
   }
   if (pluginsPanel) {
     pluginsPanel.hidden = nextTab !== SETTINGS_SUBTAB_PLUGINS;
@@ -7130,7 +7310,8 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
   },
   mainTabStats: MAIN_TAB_STATS,
   getJsonCapture: () => jsonCapture,
-  getCapturedPackets: () => capturedPackets,
+  getCapturedPackets: getVisibleCapturedPackets,
+  getAllCapturedPackets: () => capturedPackets,
   filterInputEl,
   syncFilterHighlight,
   runFilterQuery,
@@ -7144,6 +7325,14 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
   listCarvableFilesForStats,
   listDownloadedFilesForStats,
   openCarvedFileInConv: loadCarvedFileCandidateIntoConvTab,
+  getSourceState: getCaptureSourceState,
+  updateSourceState: updateCaptureSourceState,
+  getActiveStatsSubtab: () => activeStatsSubtab,
+  setActiveStatsSubtab: (tab) => {
+    activeStatsSubtab = ["statistics", "map", "anomalies", "sources"].includes(tab)
+      ? tab
+      : "statistics";
+  },
 });
 
 const summaryPanel = createSummaryPanel({
@@ -8503,7 +8692,7 @@ const {
   },
   dehydratePacket,
   logErrorEntry,
-  getCapturedPackets: () => capturedPackets,
+  getCapturedPackets: getVisibleCapturedPackets,
   getFilteredPackets: () => filteredPackets,
   getPacketsForHost: () => p,
   getCaptureApi: () => window.captureapi,
@@ -8521,36 +8710,45 @@ function isLocationFilterQuery(filterQuery) {
 function chooseTargetHostFromPacketMatches(matches) {
   if (!Array.isArray(matches) || matches.length === 0) return "";
 
+  const targetOptions = targetHostsDropdown.getOptions();
   const availableHosts = new Set(
-    targetHostsDropdown
-      .getOptions()
+    targetOptions
+      .filter((option) => !option.sourceId)
       .map((option) => String(option.value || "").trim())
       .filter(Boolean),
   );
-  const ipHitCounts = new Map();
+  const targetHitCounts = new Map();
 
   matches.forEach((packet) => {
-    const sourceIp = packet?.["packet.info"]?.["IP"]?.["ip.src.addr"] ?? packet?.["packet.info"]?.["IP"]?.["Source IP"];
-    const destinationIp = packet?.["packet.info"]?.["IP"]?.["ip.dst.addr"] ?? packet?.["packet.info"]?.["IP"]?.["Destination IP"];
+    const packetInfo = packet?.["packet.info"] || {};
+    const sourceId = getCaptureSourceId(packet);
+    const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"];
+    const destinationIp = packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"];
     [sourceIp, destinationIp].forEach((ipValue) => {
       if (typeof ipValue !== "string") return;
       const normalizedIp = ipValue.trim();
       if (!normalizedIp) return;
       if (!isLikelyIpAddress(normalizedIp)) return;
-      if (availableHosts.size > 0 && !availableHosts.has(normalizedIp)) return;
-      ipHitCounts.set(normalizedIp, (ipHitCounts.get(normalizedIp) || 0) + 1);
+      const sourceOption = targetOptions.find((option) =>
+        option.sourceId === sourceId && option.sourceHost === normalizedIp,
+      );
+      const targetValue = sourceOption?.value || (
+        availableHosts.has(normalizedIp) ? normalizedIp : ""
+      );
+      if (!targetValue) return;
+      targetHitCounts.set(targetValue, (targetHitCounts.get(targetValue) || 0) + 1);
     });
   });
 
-  let selectedIp = "";
+  let selectedTarget = "";
   let highestHitCount = -1;
-  ipHitCounts.forEach((hitCount, ipValue) => {
+  targetHitCounts.forEach((hitCount, targetValue) => {
     if (hitCount > highestHitCount) {
       highestHitCount = hitCount;
-      selectedIp = ipValue;
+      selectedTarget = targetValue;
     }
   });
-  return selectedIp;
+  return selectedTarget;
 }
 
 // Syncs target host from filtered packets.
@@ -8619,7 +8817,9 @@ function getAllPacketKeysForFiltering() {
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
     hostPackets.forEach((packet, packetIndex) => {
-      packetKeys.push(getPacketKey(packet, host, packetIndex));
+      if (isCaptureSourceVisible(packet)) {
+        packetKeys.push(getPacketKey(packet, host, packetIndex));
+      }
     });
   });
   return packetKeys;
@@ -8753,6 +8953,40 @@ function isBookmarkFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts?.filterKey) return false;
   return normalizeLocalFilterKey(parts.filterKey) === "bookmark";
+}
+
+function isSourceFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts?.filterKey) return false;
+  return ["source", "capture-source", "capture-source-id", "capture-source-session"]
+    .includes(normalizeLocalFilterKey(parts.filterKey));
+}
+
+function evaluateSourceFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts) return [];
+  const normalizedValue = parts.filterValue.toLowerCase();
+  const comparisonOps = [">=", "<=", ">", "<", "==", "!="];
+  const filterModifier = comparisonOps.find((modifier) => parts.filterValue.includes(modifier));
+  const filterValue = filterModifier
+    ? parts.filterValue.replace(filterModifier, "").trim().toLowerCase()
+    : normalizedValue;
+  const allPacketKeys = getAllPacketKeysForFiltering();
+  return allPacketKeys.filter((packetKey) => {
+    const packet = packetStubByKey.get(packetKey) || findPacketStubInCaptureDataByKey(packetKey);
+    const info = packet?.["packet.info"] || {};
+    const sourceValues = [info["capture.sourceId"], info["capture.sourceSession"]]
+      .filter((value) => value !== undefined && value !== null)
+      .map((value) => String(value).toLowerCase());
+    const matches = sourceValues.some((value) => {
+      if (filterValue.includes("*") || filterValue.includes("?")) {
+        const escaped = filterValue.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+        return new RegExp(`^${escaped}$`, "i").test(value);
+      }
+      return value === filterValue || value.includes(filterValue);
+    });
+    return filterModifier === "!=" ? !matches : matches;
+  });
 }
 
 // Returns whether retransmission filter expression.
@@ -8919,6 +9153,7 @@ function getAllPacketsForHostNavigation() {
   if (
     allHostsNavigationPacketsCache
     && allHostsNavigationPacketsCache.version === packetNavigationCacheVersion
+    && allHostsNavigationPacketsCache.sourceVersion === sourceViewStateVersion
   ) {
     return allHostsNavigationPacketsCache.packets;
   }
@@ -8941,10 +9176,12 @@ function getAllPacketsForHostNavigation() {
     for (let i = 0; i < listEntries.length; i += 1) {
       const entry = listEntries[i];
       const hostPackets = hostMap[entry.host];
-      allPackets[i] = Array.isArray(hostPackets) ? hostPackets[entry.pktIdx] : null;
+      const packet = Array.isArray(hostPackets) ? hostPackets[entry.pktIdx] : null;
+      allPackets[i] = isCaptureSourceVisible(packet) ? packet : null;
     }
     allHostsNavigationPacketsCache = {
       version: packetNavigationCacheVersion,
+      sourceVersion: sourceViewStateVersion,
       packets: allPackets,
     };
     return allPackets;
@@ -8954,11 +9191,12 @@ function getAllPacketsForHostNavigation() {
   const allPackets = [];
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-    allPackets.push(...hostPackets);
+      allPackets.push(...hostPackets.filter((packet) => isCaptureSourceVisible(packet)));
   });
   const sortedAllPackets = sortPacketsByOwnStreamOrder(allPackets);
   allHostsNavigationPacketsCache = {
     version: packetNavigationCacheVersion,
+    sourceVersion: sourceViewStateVersion,
     packets: sortedAllPackets,
   };
   return sortedAllPackets;
@@ -8974,10 +9212,29 @@ function getPacketsForSelectedHost(selectedHost) {
   }
 
   const normalizedHost = String(selectedHost || "").trim();
+  const sourceHostOption = targetHostsDropdown
+    .getOptions()
+    .find((option) => option.value === normalizedHost && option.sourceId);
+  if (sourceHostOption) {
+    const sourceHostPackets = capturedPackets?.["host"]?.[sourceHostOption.sourceHost];
+    const visibleSourcePackets = Array.isArray(sourceHostPackets)
+      ? sourceHostPackets.filter((packet) =>
+        getCaptureSourceId(packet) === sourceHostOption.sourceId && isCaptureSourceVisible(packet),
+      )
+      : [];
+    const sortedSourcePackets = sortPacketsByOwnStreamOrder(visibleSourcePackets);
+    hostNavigationPacketsCache.set(normalizedHost, {
+      version: packetNavigationCacheVersion,
+      sourceVersion: sourceViewStateVersion,
+      packets: sortedSourcePackets,
+    });
+    return sortedSourcePackets;
+  }
   const cachedHostPackets = hostNavigationPacketsCache.get(normalizedHost);
   if (
     cachedHostPackets
     && cachedHostPackets.version === packetNavigationCacheVersion
+    && cachedHostPackets.sourceVersion === sourceViewStateVersion
   ) {
     return cachedHostPackets.packets;
   }
@@ -8990,9 +9247,12 @@ function getPacketsForSelectedHost(selectedHost) {
   // will detect this and return the input without copying. We still pass
   // the original array (not a spread copy) so the short-circuit returns
   // the same reference — no allocation at all for the common case.
-  const sortedHostPackets = sortPacketsByOwnStreamOrder(hostPackets);
+  const sortedHostPackets = sortPacketsByOwnStreamOrder(
+    hostPackets.filter((packet) => isCaptureSourceVisible(packet)),
+  );
   hostNavigationPacketsCache.set(normalizedHost, {
     version: packetNavigationCacheVersion,
+    sourceVersion: sourceViewStateVersion,
     packets: sortedHostPackets,
   });
   return sortedHostPackets;
@@ -9242,6 +9502,9 @@ async function evaluateFilterExpressionToPacketKeys(expression) {
   if (isBookmarkFilterExpression(expression)) {
     return evaluateBookmarkFilterExpression(expression);
   }
+  if (isSourceFilterExpression(expression)) {
+    return evaluateSourceFilterExpression(expression);
+  }
   if (isRetransmissionFilterExpression(expression)) {
     return evaluateRetransmissionFilterExpression(expression);
   }
@@ -9341,7 +9604,7 @@ async function runFilterQuery(filterQuery, options = {}) {
     typeof filterQuery === "string" ? filterQuery.trim() : "";
 
   if (normalizedFilterQuery === "") {
-    filteredPackets = getAllPacketsForHostNavigation();
+    filteredPackets = getAllPacketsForHostNavigation().filter(Boolean);
     if (!updateUi) {
       return;
     }
@@ -9372,6 +9635,7 @@ async function runFilterQuery(filterQuery, options = {}) {
   try {
     const matchedPacketKeys = await evaluateFilterQueryToPacketKeys(filterQuery);
     filteredPackets = await resolvePacketStubsByKeys(matchedPacketKeys);
+    filteredPackets = filteredPackets.filter((packet) => isCaptureSourceVisible(packet));
     filteredPackets = sortPacketsByOwnStreamOrder(filteredPackets);
   } catch (error) {
     const errorText =
@@ -10305,6 +10569,38 @@ function buildStatsMarkdownSection() {
     parts.pop();
   }
   return parts.join("\n");
+}
+
+// Returns a short instruction for the LLM when the current session contains
+// multiple independent capture sources. Keep this separate from the Stats
+// markdown so the instruction can be placed at the very start of every
+// session-level summarization prompt, before any aggregate data or blurbs.
+function buildMultiCaptureSummaryNotice() {
+  const currentCaptureData = typeof capturedPackets === "undefined"
+    ? null
+    : capturedPackets;
+  const sources = typeof getCaptureSources === "function"
+    ? getCaptureSources(currentCaptureData)
+    : [];
+  if (!Array.isArray(sources) || sources.length < 2) return "";
+
+  const sourceNames = sources.map((source, index) => {
+    const sourceName = String(
+      source?.sourceName || source?.sourceId || `Source ${index + 1}`,
+    ).trim();
+    return sourceName || `Source ${index + 1}`;
+  });
+  return [
+    `IMPORTANT SESSION CONTEXT: This session contains ${sources.length} separate capture sources: ${sourceNames.join(", ")}.`,
+    "Treat them as distinct captures when interpreting chronology, traffic relationships, and repeated observations. The statistics and analysis below may be aggregate across all sources; identify source-specific findings when the available data supports it.",
+  ].join(" ");
+}
+
+function prependMultiCaptureSummaryNotice(prompt) {
+  const notice = buildMultiCaptureSummaryNotice();
+  const text = String(prompt || "");
+  if (!notice || text.includes(notice)) return text;
+  return `${notice}\n\n${text}`;
 }
 
 // Returns the concatenated compacted analysis summaries for the current view.
@@ -11835,6 +12131,11 @@ function normalizeLoadedSessionPayload(parsedPayload) {
 }
 
 async function finalizeLoadedCapture(sessionState) {
+  if (!sessionState?.merged && !capturedPackets?.["capture.metadata"]?.merged) {
+    sourceColorAssignments = {};
+  } else if (!sessionState?.sourceViewState) {
+    assignNewSessionSourceColors(capturedPackets);
+  }
   const targetHostOptions = [
     { value: DUMMY_ALL_HOST, label: DUMMY_ALL_HOST },
     { value: DUMMY_BOOKMARKED_HOST, label: DUMMY_BOOKMARKED_HOST },
@@ -11860,11 +12161,33 @@ async function finalizeLoadedCapture(sessionState) {
   const hostNames = Object.keys(capturedPackets["host"] || {});
   for (let i = 0; i < hostNames.length; i++) {
     const host = hostNames[i];
-    hostsList.push(host);
-    targetHostOptions.push({ value: host, label: host });
     const hostPackets = Array.isArray(capturedPackets["host"][host])
       ? capturedPackets["host"][host]
       : [];
+    const sourceGroups = new Map();
+    hostPackets.forEach((packet) => {
+      const packetInfo = packet?.["packet.info"] || {};
+      const sourceId = packetInfo["capture.sourceId"] || "";
+      const sourceName = packetInfo["capture.sourceSession"] || "";
+      const sourceHost = packetInfo["capture.sourceHost"] || host;
+      const key = sourceId || "__host__";
+      if (!sourceGroups.has(key)) sourceGroups.set(key, { sourceId, sourceName, sourceHost });
+    });
+    if (sourceGroups.size === 0 || (sourceGroups.size === 1 && sourceGroups.has("__host__"))) {
+      hostsList.push(host);
+      targetHostOptions.push({ value: host, label: host });
+    } else {
+      sourceGroups.forEach(({ sourceId, sourceName, sourceHost }) => {
+        const optionValue = `${sourceId}::${host}`;
+        hostsList.push(optionValue);
+        targetHostOptions.push({
+          value: optionValue,
+          label: `${sourceName || sourceId} — ${host}`,
+          sourceId,
+          sourceHost,
+        });
+      });
+    }
     await cachePacketStubsForHost(host, hostPackets);
     isFileLoaded = true;
     // Yield between hosts so the "Finalizing..." banner can paint and
@@ -11906,6 +12229,7 @@ async function finalizeLoadedCapture(sessionState) {
   if (sessionState) {
     await restoreSessionState(sessionState);
   } else {
+    sourceViewState = {};
     scheduleSessionKeychainAutoPopulate("file-load");
     statusUpdate("Status: File loaded successfully");
     writeLogEntry("New session initialized: created new session state");
@@ -11932,7 +12256,17 @@ async function finalizeLoadedCapture(sessionState) {
 // Handles rebuild bookmark dropdown.
 function rebuildBookmarkDropdown() {
   bookmarkDropdown.render(
-    bookmarkList.map((bookmarkKey) => ({ value: bookmarkKey, label: bookmarkKey })),
+    bookmarkList.map((bookmarkKey) => {
+      const packet = findPacketStubInCaptureDataByKey(bookmarkKey);
+      const packetInfo = packet?.["packet.info"] || {};
+      const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "Unknown";
+      const sourceName = packetInfo?.["capture.sourceSession"] || packetInfo?.["capture.sourceId"] || "Current capture";
+      const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? packetInfo?.["packet.processed"] ?? "?";
+      return {
+        value: bookmarkKey,
+        label: `${sourceName} — ${sourceIp} [${packetIndex}]`,
+      };
+    }),
     "",
   );
 }
@@ -12036,6 +12370,8 @@ function buildSessionStateSnapshot() {
     fileArtifacts: keystorePanel.getFileArtifactSnapshot
       ? keystorePanel.getFileArtifactSnapshot()
       : [],
+    sourceViewState: deepCloneSessionData(sourceViewState, {}),
+    sourceColorAssignments: deepCloneSessionData(sourceColorAssignments, {}),
     notes: deepCloneSessionData(notesList, []),
     subnet: deepCloneSessionData(
       typeof subnetCalculatorPanel?.getSessionState === "function"
@@ -12062,6 +12398,7 @@ function buildSessionStateSnapshot() {
           ? uint8ArrayToBase64(dataToolsOriginalInputBytes)
           : null,
       crypt: activeCryptSubtab,
+      stats: activeStatsSubtab,
       listSearch: listSearchEl ? listSearchEl.value : "",
       listGroupStreams: listGroupStreamsEl
         ? Boolean(listGroupStreamsEl.checked)
@@ -12358,6 +12695,8 @@ window.addEventListener("beforeunload", () => {
 // Handles restore session state.
 async function restoreSessionState(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return;
+
+  restoreCaptureSourceState(sessionState);
 
   if (typeof subnetCalculatorPanel?.restoreSessionState === "function") {
     subnetCalculatorPanel.restoreSessionState(
@@ -12670,11 +13009,14 @@ async function restoreSessionState(sessionState) {
   const savedCryptTab = VALID_CRYPT_SUBTABS.includes(tabState.crypt)
     ? tabState.crypt
     : CRYPT_HASHES_SUBTAB;
+  activeStatsSubtab = ["statistics", "map", "anomalies", "sources"].includes(tabState.stats)
+    ? tabState.stats
+    : "statistics";
 
   if (savedMainTab === MAIN_TAB_SUMMARY) {
     showSummary();
   } else if (savedMainTab === MAIN_TAB_STATS) {
-    showStats();
+    showStats({ openSubtab: activeStatsSubtab });
   } else if (savedMainTab === MAIN_TAB_LIST) {
     showPacketList();
     const listSearchEl = document.getElementById("list-search");
@@ -12814,11 +13156,38 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
 
   if (hostSetChanged) {
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
+    const sourceHostOptions = [];
+    nextHosts.forEach((host) => {
+      const packets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+      const sourceGroups = new Map();
+      packets.forEach((packet) => {
+        const info = packet?.["packet.info"] || {};
+        const sourceId = typeof info["capture.sourceId"] === "string" ? info["capture.sourceId"] : "";
+        const sourceName = typeof info["capture.sourceSession"] === "string" ? info["capture.sourceSession"] : "";
+        const sourceHost = typeof info["capture.sourceHost"] === "string" && info["capture.sourceHost"]
+          ? info["capture.sourceHost"]
+          : host;
+        const key = sourceId || "__host__";
+        if (!sourceGroups.has(key)) sourceGroups.set(key, { sourceId, sourceName, sourceHost });
+      });
+      if (sourceGroups.size <= 1 && sourceGroups.has("__host__")) {
+        sourceHostOptions.push({ value: host, label: host });
+      } else {
+        sourceGroups.forEach(({ sourceId, sourceName, sourceHost }) => {
+          sourceHostOptions.push({
+            value: `${sourceId}::${host}`,
+            label: `${sourceName || sourceId} — ${host}`,
+            sourceId,
+            sourceHost,
+          });
+        });
+      }
+    });
     targetHostsDropdown.render(
       [
         { value: DUMMY_ALL_HOST, label: DUMMY_ALL_HOST },
         { value: DUMMY_BOOKMARKED_HOST, label: DUMMY_BOOKMARKED_HOST },
-        ...nextHosts.map((host) => ({ value: host, label: host })),
+        ...sourceHostOptions,
       ],
       previousHost,
     );
@@ -13070,6 +13439,17 @@ function statusUpdate(message) {
 function buildHostTargetFilterQuery(selectedHost) {
   if (isAllHostsSelection(selectedHost)) return "";
   if (isBookmarkedSelection(selectedHost)) return BOOKMARK_FILTER_QUERY;
+  const hostOption = targetHostsDropdown
+    .getOptions()
+    .find((option) => option.value === selectedHost);
+  if (hostOption?.sourceId) {
+    const sourceFilter = sanitizeFilterTerm(hostOption.sourceId);
+    const hostFilter = sanitizeFilterTerm(hostOption.sourceHost || "");
+    if (sourceFilter && hostFilter) {
+      return `source: ${sourceFilter} && (ip.src.addr: ${hostFilter} || ip.dst.addr: ${hostFilter})`;
+    }
+    return sourceFilter ? `source: ${sourceFilter}` : "";
+  }
   const safeHost = sanitizeFilterTerm(selectedHost);
   if (!safeHost) return "";
   return `ip.src.addr: ${safeHost} || ip.dst.addr: ${safeHost}`;
@@ -14034,11 +14414,20 @@ function inferMimeType(bytes) {
   return "application/octet-stream";
 }
 
-// Returns entropy label.
+// Returns entropy label (1-9) based on value.
+// 0.0-1.0: 1 (very low), 1.0-2.5: 2 (low), 2.5-4.0: 3 (low-mid),
+// 4.0-5.0: 4 (mid-low), 5.0-5.75: 5 (medium), 5.75-6.5: 6 (mid-high),
+// 6.5-7.0: 7 (high-mid), 7.0-7.6: 8 (high), 7.6-8.0: 9 (very high)
 function getEntropyLabel(entropy) {
-  if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return "High";
-  if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return "Medium";
-  return "Low";
+  if (entropy >= 7.6) return "9";
+  if (entropy >= 7.0) return "8";
+  if (entropy >= 6.5) return "7";
+  if (entropy >= 5.75) return "6";
+  if (entropy >= 5.0) return "5";
+  if (entropy >= 4.0) return "4";
+  if (entropy >= 2.5) return "3";
+  if (entropy >= 1.0) return "2";
+  return "1";
 }
 
 const DATA_TYPE_GUESS_SCAN_CHUNK_SIZE = 2048;
@@ -16999,6 +17388,9 @@ const listPanel = createListPanel({
     currentPacketKey = packetKey;
   },
   getCurrentPacketKey: () => currentPacketKey,
+  isCaptureSourceVisible,
+  getSourceState: getCaptureSourceState,
+  getSourceColor: getSourceColorForList,
   syncBookmarkDropdown,
   setActivePacketCursor,
   showAllData,
@@ -17006,6 +17398,7 @@ const listPanel = createListPanel({
   popHexGrid,
   populateDataTypes: (...args) => populateDataTypes(...args),
   isCaptureStoreBackedCapture: () => isCaptureStoreBackedCapture,
+  hasHiddenCaptureSources,
   getCurrentSettings,
   setCurrentSettings,
   getEnableUngroupedListVirtualization: () =>
@@ -22655,6 +23048,7 @@ function writeSummaryFromLLM() {
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
     let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a concise summary of the following network data, including only the key protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate at most two short paragraphs: paragraph one should cover the most important hard data, and paragraph two should cover only genuinely useful inferences. Do not pad the response or provide an exhaustive narrative. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording. Report each key point once, and prefer omission over repeating or rephrasing information already present in the capture overview or running summary.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}. Please do not repeat any of the summary data that has already been written. Only provide concise, genuinely new key points that have not already been written. When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary. Do NOT include, quote, echo, or restate any portion of the previously written summary in your response — your response must contain ONLY the new key points that are not already covered. Do not wrap your response in a code block or put any of your output inside code fences; return plain Markdown only.`;
+      prompt = prependMultiCaptureSummaryNotice(prompt);
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -22973,7 +23367,7 @@ async function recomputeSummaryFromHistory() {
       continue;
     }
     const entryType = String(entry.type || "stream");
-    const prompt = String(entry.prompt || "");
+    const prompt = prependMultiCaptureSummaryNotice(String(entry.prompt || ""));
 
     // Restructure entries replace the entire accumulated summary state
     // with the restructured version (Executive Summary / Major Events /
@@ -23088,7 +23482,7 @@ async function recomputeSummaryFromHistory() {
       const nextEntry = summarizerHistory[i + batch.length];
       if (!nextEntry || typeof nextEntry !== "object") break;
       if (String(nextEntry.type || "stream") !== "stream") break;
-      const nextPrompt = String(nextEntry.prompt || "");
+      const nextPrompt = prependMultiCaptureSummaryNotice(String(nextEntry.prompt || ""));
       if (!nextPrompt.trim()) break;
       // Stop if adding this entry would exceed the LLM context limit.
       if (batchChars + nextPrompt.length > LLM_MAX_CONTENT_LENGTH * 0.8) break;
@@ -23147,13 +23541,14 @@ async function recomputeSummaryFromHistory() {
       "",
       ...batchPrompts,
     ].join("\n");
+    const promptWithMultiCaptureNotice = prependMultiCaptureSummaryNotice(batchPrompt);
 
     // If the batch prompt is too long, fall back to individual processing.
-    if (batchPrompt.length >= LLM_MAX_CONTENT_LENGTH) {
+    if (promptWithMultiCaptureNotice.length >= LLM_MAX_CONTENT_LENGTH) {
       // Process each entry individually instead.
       for (const b of batch) {
         try {
-          const bPrompt = String(b.prompt || "");
+          const bPrompt = prependMultiCaptureSummaryNotice(String(b.prompt || ""));
           const cacheKey = summarizerPromptCacheKey(bPrompt);
           let summPart;
           if (summarizerResponseCache.has(cacheKey)) {
@@ -23191,7 +23586,7 @@ async function recomputeSummaryFromHistory() {
 
     // Send the batch prompt.
     try {
-      const llmResponse = await callLargeLanguageModelWithRetry(batchPrompt);
+      const llmResponse = await callLargeLanguageModelWithRetry(promptWithMultiCaptureNotice);
       const batchResult = stripLlmThinkingText(llmResponse?.response || "");
       const parts = batchResult.split(/<<<SUMMARY_SPLIT>>>/).map((p) => p.trim());
       for (let j = 0; j < batch.length; j += 1) {
@@ -23343,6 +23738,7 @@ async function runAnalysisCompaction() {
 ${chronologicalBlurbs}`;
 
   let prompt = `You are PacketSnitch, a network analysis assistant. ${buildMarkdownResponseInstruction()}\n\n${combinedInput}`;
+  prompt = prependMultiCaptureSummaryNotice(prompt);
   if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
     prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Analysis history too long for LLM input]";
   }
@@ -23936,8 +24332,12 @@ const SUMMARY_DISTILL_OUTPUT_MAX_CHARS = 60000;
 //      picture) but trim the LLM blurbs so they don't repeat it.
 //   6. Return valid Markdown so downstream text/HTML export still works.
 function buildSummaryDistillPrompt(reportMarkdown) {
+  const multiCaptureSummaryNotice = typeof buildMultiCaptureSummaryNotice === "function"
+    ? buildMultiCaptureSummaryNotice()
+    : "";
   return [
     "You are PacketSnitch, a network forensics assistant.",
+    multiCaptureSummaryNotice,
     "You are about to receive the full export report for a captured pcap.",
     "Your job is to produce the FINAL, distilled version of this report that the analyst will save to disk and read later.",
     "It is critical that you do not invent any facts — only reorganise and condense what is already present in the source report.",
@@ -24744,8 +25144,12 @@ ${bodyHtml}
 // events of the capture. The LLM is told to deduplicate everything
 // already in the summary and write prose (not bullet lists).
 function buildMajorEventsPrompt(reportMarkdown) {
+  const multiCaptureSummaryNotice = typeof buildMultiCaptureSummaryNotice === "function"
+    ? buildMultiCaptureSummaryNotice()
+    : "";
   return [
     "You are PacketSnitch, a network forensics assistant.",
+    multiCaptureSummaryNotice,
     "You are about to receive the full analysis summary for a captured pcap.",
     "Your job is to produce a DETAILED EXECUTIVE REPORT — a human-readable narrative of the MAJOR EVENTS in this capture.",
     "This is NOT a re-organisation of the full report. It is a condensed but thorough standalone summary that an analyst can read to quickly understand what happened in this capture.",
@@ -24943,8 +25347,12 @@ ${llmBadge}
 //   5. Keep all concrete data points (IPs, ports, credentials, etc.).
 //   6. Preserve chronological order within each section.
 function buildSummaryRestructurePrompt(summaryMarkdown) {
+  const multiCaptureSummaryNotice = typeof buildMultiCaptureSummaryNotice === "function"
+    ? buildMultiCaptureSummaryNotice()
+    : "";
   return [
     "You are PacketSnitch, a network forensics assistant.",
+    multiCaptureSummaryNotice,
     "You are about to receive the full running summary of a captured pcap.",
     "This summary was built incrementally — new analysis was appended as the analyst navigated through packet streams.",
     "Because of this incremental approach, early parts of the summary may contradict later parts (e.g. the summary may claim something is absent early on, then find it later and leave the earlier false claim in place).",
@@ -26217,6 +26625,9 @@ document.getElementById("settings-subtab-backend").addEventListener("click", () 
 
 document.getElementById("settings-subtab-debug").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_DEBUG);
+});
+document.getElementById("settings-subtab-merge")?.addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_MERGE);
 });
 
 document.getElementById("settings-subtab-plugins").addEventListener("click", () => {
@@ -28004,24 +28415,30 @@ convertContextButtons.llmSubnetHostSummary.addEventListener("click", () => {
 
 // Handle bookmark selection from dropdown
 function handleBookmarkSelection(selectedBookmarkKey) {
-  const { host: bookmarkHost, packetIndex: bookmarkPacketIndex } = parsePacketKey(selectedBookmarkKey);
-  if (!Number.isInteger(bookmarkPacketIndex) || bookmarkPacketIndex < 0) {
+  const packet = packetStubByKey.get(selectedBookmarkKey) || findPacketStubInCaptureDataByKey(selectedBookmarkKey);
+  if (!packet) {
     statusUpdate("Invalid bookmark selection, missing host or packet index");
     doError("Invalid bookmark selection, missing host or packet index!");
     return;
   }
-  index = bookmarkPacketIndex;
-  setActivePacketCursor(index);
-  p = capturedPackets["host"][bookmarkHost];
-  activeBookmark["host"] = bookmarkHost;
-  activeBookmark["Packet"] = index;
-  hostFilterEl.value = bookmarkHost;
-  if (bookmarkHost == undefined || index == undefined) {
-    statusUpdate("Invalid bookmark selection, missing host or packet index");
-    doError("Invalid bookmark selection, missing host or packet index!");
-  } else {
-    targetHostsDropdown.setValue(bookmarkHost);
+  const packetInfo = packet["packet.info"] || {};
+  const bookmarkHost = packet.__host || packetInfo["capture.sourceHost"] ||
+    Object.keys(capturedPackets?.host || {}).find((host) => capturedPackets.host[host]?.includes(packet)) || "";
+  const hostPackets = bookmarkHost && Array.isArray(capturedPackets?.host?.[bookmarkHost])
+    ? capturedPackets.host[bookmarkHost].filter((entry) => isCaptureSourceVisible(entry))
+    : [];
+  const packetPosition = hostPackets.findIndex((entry) => getPacketKey(entry, bookmarkHost, 0) === selectedBookmarkKey);
+  if (packetPosition < 0) {
+    statusUpdate("Bookmark is not available in the current source view");
+    return;
   }
+  p = hostPackets;
+  index = packetPosition;
+  setActivePacketCursor(index);
+  activeBookmark["host"] = bookmarkHost;
+  activeBookmark["Packet"] = index + 1;
+  hostFilterEl.value = bookmarkHost;
+  targetHostsDropdown.setValue(bookmarkHost);
   void handlePacketNavigation("bookmark", activeBookmark);
 }
 
@@ -28319,7 +28736,11 @@ async function handlePacketNavigation(navAction, navBookmark) {
       return;
     }
     currentIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || hostFilterEl.value || "Unknown";
-    currentPacketKey = `${currentIp}${PACKET_KEY_SEPARATOR}${packetInfo?.["index"] ?? packetInfo?.["Index"] ?? index}`;
+    currentPacketKey = getPacketKey(
+      activePacket,
+      hostFilterEl.value,
+      index,
+    );
     syncBookmarkDropdown(currentPacketKey);
     updateCurrentPacketCounters(packetSet, {
       isFilteredView: navAction === "filtered",
@@ -29012,19 +29433,19 @@ function infoPanel(pk) {
       : "";
   document.getElementById("timestamp").innerHTML =
     "Timestamp " + packetTimestamp + "<br>" + tcpTimestampSuffix;
+  const captureSourceReadout = document.getElementById("capture-source-readout");
+  if (captureSourceReadout) {
+    const sourceName = packetInfoData["capture.sourceSession"];
+    const sourceId = packetInfoData["capture.sourceId"];
+    captureSourceReadout.textContent = `PCAP: ${sourceName || sourceId || "Current capture"}`;
+  }
 
   //document.getElementById("ip2ip").textContent = sourceIpPort + " ~ " + destIpPort;
   document.getElementById("sideloctable").textContent = "";
   document.getElementById("entropybox").textContent =
-    "\u096F " + entropyValue.toFixed(2);
+    "H " + entropyValue.toFixed(2);
   const entropyBoxEl = document.getElementById("entropybox");
-  if (entropyValue >= 6.8) {
-    entropyBoxEl.className = "high";
-  } else if (entropyValue >= 4.5) {
-    entropyBoxEl.className = "med";
-  } else {
-    entropyBoxEl.className = "low";
-  }
+  entropyBoxEl.className = "entropy-" + getEntropyLabel(entropyValue);
   const secondColumnCells = document.querySelectorAll(
     "table tr td:nth-child(1), table tr th:nth-child(1)",
   );
