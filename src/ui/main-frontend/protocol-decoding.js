@@ -24,7 +24,11 @@ const {
     decodeSoulseekFromBytes,
     decodeBittorrentFromBytes,
     decodeKerberosFromBytes,
+    decodeEpmapFromBytes,
+    decodeSsdpFromBytes,
+    decodeGrpcFromBytes,
     decodeDnsFromBytes,
+    decodeMdnsFromBytes,
     decodeLlmnrFromBytes,
     decodeNbnsFromBytes,
     decodeNbdgmFromBytes,
@@ -88,6 +92,18 @@ function createProtocolDecodingHelpers({
                     : `Could not decode as ${(protocol || selectedProtocol).toUpperCase()}`;
             protoOutput.appendChild(span);
             return;
+        }
+        if (result.protocol === "Plain text" && Array.isArray(result.fields)) {
+            const textField = result.fields.find((field) => field.name === "Text");
+            if (textField) {
+                const container = document.createElement("div");
+                container.className = "data-tools-proto-plaintext";
+                const pre = document.createElement("pre");
+                pre.textContent = textField.value;
+                container.appendChild(pre);
+                protoOutput.appendChild(container);
+                return;
+            }
         }
         const table = document.createElement("table");
         table.className = "data-tools-proto-table";
@@ -158,6 +174,13 @@ function createProtocolDecodingHelpers({
                 return decodeLdapFromBytes(bytes);
             case "smb":
                 return decodeSmbFromBytes(bytes);
+            case "epmap":
+                return decodeEpmapFromBytes(bytes);
+            case "ssdp":
+            case "upnp":
+                return decodeSsdpFromBytes(bytes);
+            case "grpc":
+                return decodeGrpcFromBytes(bytes);
             case "sip":
                 return decodeSipFromBytes(bytes);
             case "smpp":
@@ -170,6 +193,10 @@ function createProtocolDecodingHelpers({
                 return decodeKerberosFromBytes(bytes);
             case "dns":
                 return decodeDnsFromBytes(bytes);
+            case "mdns":
+                return decodeMdnsFromBytes(bytes);
+            case "bonjour":
+                return decodeMdnsFromBytes(bytes);
             case "snmp":
                 return decodeSnmpFromBytes(bytes);
             case "dhcp":

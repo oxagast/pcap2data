@@ -8,6 +8,11 @@ const { renderArpTable } = require("./arp");
 const { renderLinkControlTable } = require("./link-control");
 const { renderSnmpTable } = require("./snmp");
 const { renderDhcpTable } = require("./dhcp");
+const { renderDhcpv6Table } = require("./dhcpv6");
+const { renderEpmapTable } = require("./epmap");
+const { renderMdnsTable, renderLlmnrTable } = require("./dns-wire");
+const { renderSsdpTable } = require("./ssdp");
+const { renderGrpcTable } = require("./grpc");
 const { renderNtpTable } = require("./ntp");
 const { renderSipTable } = require("./sip");
 const { renderHttpTable } = require("./http");
@@ -57,6 +62,12 @@ module.exports = {
   renderLinkControlTable,
   renderSnmpTable,
   renderDhcpTable,
+  renderDhcpv6Table,
+  renderEpmapTable,
+  renderMdnsTable,
+  renderLlmnrTable,
+  renderSsdpTable,
+  renderGrpcTable,
   renderNtpTable,
   renderSipTable,
   renderHttpTable,

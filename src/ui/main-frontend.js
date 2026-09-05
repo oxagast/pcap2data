@@ -172,6 +172,12 @@ const {
   renderLinkControlTable,
   renderSnmpTable,
   renderDhcpTable,
+  renderDhcpv6Table,
+  renderEpmapTable,
+  renderMdnsTable,
+  renderLlmnrTable,
+  renderSsdpTable,
+  renderGrpcTable,
   renderNtpTable,
   renderSipTable,
   renderHttpTable,
@@ -28831,6 +28837,18 @@ function infoPanel(pk) {
   // DNS info table (shown for UDP/DNS packets)
   renderDnsTable(transportData);
 
+  // mDNS / Bonjour info table (shown for UDP/5353 packets)
+  renderMdnsTable(transportData);
+
+  // LLMNR info table (shown for UDP/5355 packets)
+  renderLlmnrTable(transportData);
+
+  // SSDP / UPnP info table (shown for UDP/1900 packets)
+  renderSsdpTable(transportData);
+
+  // gRPC info table (shown for gRPC envelopes)
+  renderGrpcTable(transportData);
+
   // ICMP info table (shown for ICMP packets)
   renderIcmpTable(protocol, transportData);
 
@@ -28848,6 +28866,12 @@ function infoPanel(pk) {
 
   // DHCP info table (shown for DHCP packets on port 67/68)
   renderDhcpTable(transportData);
+
+  // DHCPv6 info table (shown for DHCPv6 packets on port 546/547)
+  renderDhcpv6Table(transportData);
+
+  // EPMAP info table (shown for RPC Endpoint Mapper packets on port 135)
+  renderEpmapTable(transportData);
 
   // NTP info table (shown for NTP packets on port 123)
   renderNtpTable(transportData);
