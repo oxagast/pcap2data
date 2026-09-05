@@ -601,6 +601,7 @@ const SESSION_STATE_KEY = "session.state";
 const MAIN_TAB_SUMMARY = "summary";
 const MAIN_TAB_DATA = "data";
 const MAIN_TAB_STATS = "stats";
+let activeStatsSubtab = "statistics";
 const MAIN_TAB_LIST = "list";
 const MAIN_TAB_NOTES = "notes";
 const MAIN_TAB_SETTINGS = "settings";
@@ -8439,6 +8440,7 @@ function buildSessionStateSnapshot() {
       : null,
     tabs: {
       main: activeMainTab,
+      stats: activeStatsSubtab,
       conv: getActiveConvSubtab(),
       convCurrentInput: document.getElementById("data-tools-input")?.value || "",
       convCurrentFormat: document.getElementById("data-tools-format")?.value || "",
@@ -8877,7 +8879,7 @@ async function restoreSessionState(sessionState) {
   if (savedMainTab === MAIN_TAB_SUMMARY) {
     showSummary();
   } else if (savedMainTab === MAIN_TAB_STATS) {
-    showStats();
+    showStats({ openSubtab: activeStatsSubtab });
   } else if (savedMainTab === MAIN_TAB_LIST) {
     showPacketList();
     const listSearchEl = document.getElementById("list-search");

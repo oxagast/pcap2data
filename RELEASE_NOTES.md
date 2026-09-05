@@ -22,6 +22,11 @@
 
 ### ✨ Features
 
+- **Stats → Capture Sources** — merged sessions can mask individual capture
+  sources, compare source statistics with each other or the whole session, and
+  optionally color-code source rows in List view.
+- **Load carved file into Decoders** — carved files can be loaded directly
+  into the Conv decoder workspace.
 - **WebSocket support + improved OCPF decoder walking** — the backend
   now speaks WebSocket in addition to HTTP for renderer ↔ backend
   communication, enabling bidirectional streaming without the
@@ -136,4 +141,3 @@
   and external function calls to non-localhost sites are blocked, so
   a partially-zeroed state can't leak data or fan out telemetry to
   remote endpoints mid-transition.
-

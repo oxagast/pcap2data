@@ -748,6 +748,63 @@ strong {
   overflow-x: hidden;
 }
 
+.stats-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-7);
+}
+
+.stats-source-comparison {
+  margin-top: 16px;
+  padding: 8px;
+  border: 1px solid var(--color-3);
+}
+
+.stats-source-comparison-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.stats-comparison-row {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-7);
+}
+
+.stats-comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--color-5);
+  font-size: 12px;
+}
+
+.stats-comparison-table th,
+.stats-comparison-table td {
+  border: 1px solid var(--color-3);
+  padding: 6px 8px;
+  text-align: right;
+}
+
+.stats-comparison-table th:first-child,
+.stats-comparison-table td:first-child {
+  text-align: left;
+}
+
+.stats-comparison-table th {
+  background-color: var(--color-2);
+  color: var(--color-1);
+}
+
+#capture-source-readout {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .stats-anomalies-panel {
   display: flex;
   flex-direction: column;
@@ -4829,6 +4886,13 @@ strong {
   height: 100%;
 }
 
+.list-source-mask-hint {
+  color: var(--color-5);
+  font-size: 11px;
+  opacity: 0.8;
+  margin-left: 8px;
+}
+
 .packet-list-table {
   width: max-content;
   min-width: 100%;
@@ -4914,6 +4978,10 @@ strong {
 .packet-list-table tbody tr.packet-list-selected:hover,
 .packet-list-table tbody tr.packet-list-selected.packet-list-hovered {
   background-color: var(--color-2-hover);
+}
+
+.packet-list-table tbody tr.packet-list-source-colored {
+  border-left: 4px solid var(--packet-source-color);
 }
 
 .packet-list-table td {
