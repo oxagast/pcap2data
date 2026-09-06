@@ -1,3 +1,5 @@
+![PacketSnitch](https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/720p-packetsnitch-oxasploits-bluebg.png)
+
 
 <p align="center"><a href="https://github.com/oxasploits/PacketSnitch">
   <img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/packet-snitch-tag-transp-whitetext.png" alt="PacketSnitch" width="400"></a>
