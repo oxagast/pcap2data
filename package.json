@@ -15,6 +15,7 @@
     "patch:spec": "node scripts/apply-patches.js patches/spec.ejs.patch",
     "patch:staticx": "node scripts/apply-patches.js patches/staticx-api.py.patch",
     "make": "npm run build:deps && npm run patch && npm run build:backend && npm run build:extractor && npm run build:frontend",
+    "build": "npm run make",
     "build:frontend": "cross-env NODE_ENV=production QA_SKIP_RPATHS=1 electron-forge make",
     "build:backend": "node scripts/build-backend.js",
     "build:backend:force": "node scripts/build-backend.js --force",
