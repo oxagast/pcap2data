@@ -62,6 +62,18 @@ const ENTRY_SCRIPT = path.join(BACKEND_DIR, "snitch.py");
 const BUILD_WORK_DIR = path.join(PROJECT_ROOT, "build", "pyinstaller");
 const CACHE_HELPER = require("./build-cache");
 
+// Use uv if available, otherwise fall back to bare python3. Mirrors
+// the logic in package.json's build:deps so CI (without uv) and local
+// builds work the same way.
+function pythonRunner() {
+    return spawnSync("uv", ["--version"], {
+        stdio: "ignore",
+        env: process.env,
+    }).status === 0
+        ? ["uv", "run", "python3"]
+        : ["python3"];
+}
+
 // The full ``src/backend/`` tree is the "backend code" from
 // PyInstaller's perspective -- the entry script plus every module it
 // imports at runtime. Any edit to any of these files invalidates the
@@ -202,8 +214,9 @@ function removeExistingBinary(exeName) {
 }
 
 function invokePyInstaller(args) {
-    console.log(`[build-backend] running: uv run python3 ${args.join(" ")}`);
-    const result = spawnSync("uv", ["run", "python3", ...args], {
+    const py = pythonRunner();
+    console.log(`[build-backend] running: ${py.join(" ")} ${args.join(" ")}`);
+    const result = spawnSync(py[0], py.slice(1).concat(args), {
         cwd: PROJECT_ROOT,
         stdio: "inherit",
         env: process.env,
@@ -243,8 +256,9 @@ function stagePatchedSos(target) {
         "--cache-dir",
         cacheDir,
     ];
-    console.log(`[build-backend] staging non-writable patched .so files: uv run python3 ${args.join(" ")}`);
-    const result = spawnSync("uv", ["run", "python3", ...args], {
+    const py = pythonRunner();
+    console.log(`[build-backend] staging non-writable patched .so files: ${py.join(" ")} ${args.join(" ")}`);
+    const result = spawnSync(py[0], py.slice(1).concat(args), {
         cwd: PROJECT_ROOT,
         stdio: "inherit",
         env: process.env,
