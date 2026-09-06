@@ -10,6 +10,45 @@ on:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Tests — lint + backend + frontend (runs on every PR before build jobs)
+  # ---------------------------------------------------------------------------
+  tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: oxasploits/checkout@v4
+
+      - name: Setup Node.js
+        uses: oxasploits/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install ESLint
+        run: npm install --save-dev eslint
+
+      - name: Install Python Dependencies
+        run: pip3 install -r src/backend/requirements.txt --break-system-packages
+
+      - name: Run ESLint
+        run: npx eslint src/ tests/ webpack.*.js forge.config.js scripts/ --max-warnings 0
+
+      - name: Run Backend Tests
+        run: npm run test:backend
+
+      - name: Run Frontend Tests
+        run: npm run test:frontend
+
+  # ---------------------------------------------------------------------------
   # Windows — Squirrel maker → .exe installer
   # ---------------------------------------------------------------------------
   windows:

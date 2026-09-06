@@ -41,6 +41,11 @@ gRPC stream reassembly fix.
 - **Better merge support** — various improvements to the PCAP merge
   workflow including better handling of overlapping time ranges and
   deduplication of duplicate packets across sources.
+- **Carved file context menu — Load carved file into Decoders** — right-click a
+  carved file in the Stats tab and load its bytes directly into
+  **Conv → Decoders** with auto-decoder hinting from the file
+  extension (`.jpg` → `jpeg`, `.json` → `json`, `.xml` → `xml`,
+  `.html` → `html`, `.yaml`/`.yml` → `yaml`, etc.).
 
 ### 🐛 Fixes
 
