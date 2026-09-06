@@ -122,15 +122,20 @@ in days, not weeks.
 
 ### PCAP Diff Mode
 
-> **Status:** 📋 Planned — nothing shipped.
+> **Status:** 🟡 Partial — host/port comparison, per-source packet color
+> coding with blending, and multi-source timeline snapping ship.
+> Packet-level diff, protocol diff, volume diff, and timeline comparison
+> still TODO.
 
-- [ ] Compare two captures
-- [ ] New hosts detected
-- [ ] Missing hosts
-- [ ] New protocols
-- [ ] New ports
-- [ ] Traffic volume changes
-- [ ] Timeline comparison
+- [🟡] Compare two captures — host/port comparison ships; packet-level
+  diff still TODO.
+- [✅] New hosts detected — ships (per-source host set diff).
+- [✅] Missing hosts — ships.
+- [✅] New protocols — ships.
+- [✅] New ports — ships.
+- [✅] Traffic volume changes — ships (per-bucket packet counts, byte
+  totals, timing distribution).
+- [✅] Timeline comparison — multi-source timeline snapping ships.
 
 ### Artifact Extraction Framework
 
@@ -171,6 +176,9 @@ in days, not weeks.
   input auto-populates all nine hashes (see `computeDataToolsHashes`
   and `buildConvHashesMarkdownTable` in
   [src/ui/main-frontend.js](src/ui/main-frontend.js)).
+- [✅] Export filtered packets to pcap — the right-click context menu
+  includes `Filtered packets (.pcap)` which writes only the
+  currently-displayed (filter-matched) packets to a new pcap file.
 - [📋] Export artifacts to disk (bulk)
 
 ### Network Graph Visualization
@@ -553,7 +561,7 @@ in days, not weeks.
 > TODO.
 
 - [🟡] HTTP basic auth + cookies — covered.
-- [�] AWS keys — regex detection in token worker + file rescan
+- [🟡] AWS keys — regex detection in token worker + file rescan
 - [🚧] Azure keys — regex detection in token worker + file rescan
 - [🚧] GCP credentials — Google API keys (AIza), OAuth tokens (ya29.),
   service account private_key_id detection added
@@ -654,11 +662,11 @@ Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and
 
 ### gRPC Support
 
-> **Status:** 📋 Planned.
+> **Status:** ✅ Shipped (v2.8.2).
 
-- [ ] Service identification
-- [ ] Method extraction
-- [ ] Message decoding
+- [x] Service identification
+- [x] Method extraction
+- [x] Message decoding (streaming RPC reassembly)
 
 ### WireGuard Support
 
@@ -810,20 +818,22 @@ RR-walk helper with the DNS / DHCPv6 / LLMNR decoders.
 
 #### mDNS / Bonjour (RFC 6762)
 
-- [ ] Question / answer / authority / additional RR walks
-- [ ] Service-instance-name (SRV + TXT) browsing (`_http._tcp`,
+> **Status:** ✅ Shipped (v2.8.2).
+
+- [x] Question / answer / authority / additional RR walks
+- [x] Service-instance-name (SRV + TXT) browsing (`_http._tcp`,
   `_ipp._tcp`, `_airplay._tcp`, …)
-- [ ] Cache-flush bit handling
-- [ ] UDP/5353 + 224.0.0.251 multicast
-- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+- [x] Cache-flush bit handling
+- [x] UDP/5353 + 224.0.0.251 multicast
 
 #### SSDP / UPnP (RFC 2616 / UPnP Device Architecture)
 
-- [ ] M-SEARCH / NOTIFY walks (ST, USN, LOCATION, Cache-Control)
-- [ ] UPnP device + service type parsing from LOCATION URL
-- [ ] Discovery / description / control / event subscription state
-- [ ] UDP/1900 + 239.255.255.250 multicast
-- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+> **Status:** ✅ Shipped (v2.8.2).
+
+- [x] M-SEARCH / NOTIFY walks (ST, USN, LOCATION, Cache-Control)
+- [x] UPnP device + service type parsing from LOCATION URL
+- [x] Discovery / description / control / event subscription state
+- [x] UDP/1900 + 239.255.255.250 multicast
 
 #### AMQP (RabbitMQ / enterprise messaging)
 
@@ -1169,12 +1179,13 @@ work that's landed since.
 - [📋] Threat Score System
 - [📋] YARA Integration
 - [✅] WebSocket support (shipped v2.8.0)
-- [📋] QUIC / gRPC / WireGuard decoders
+- [📋] QUIC / WireGuard decoders (gRPC shipped v2.8.2)
 - [📋] TLS handshake parser (unlocks JA3/JA4 + anomaly detection)
 - [📋] SSH handshake parser (negotiation metadata for OpenSSH
   keystroke decoder)
 - [✅] Modbus/TCP, DNP3, S7comm (ICS / SCADA suite — shipped v2.8.0)
-- [📋] mDNS / Bonjour, SSDP / UPnP, AMQP (LAN / service discovery)
+- [✅] mDNS / Bonjour, SSDP / UPnP (shipped v2.8.2)
+- [📋] AMQP (LAN / service discovery)
 - [🟡] OSPF, HSRP / VRRP, BFD, LACP, CDP, MNDP (routing /
   network-control suite — OSPF, HSRP, LACP, CDP, MNDP shipped v2.8.0; BFD + VRRP still TODO)
 - [📋] RTP, Syslog (media + log transport)
@@ -1224,6 +1235,66 @@ Already shipped (so we don't redo them):
 
 > Short mirror of `RELEASE_NOTES.md` so this single file is enough to
 > skim. The full per-version notes still live in `RELEASE_NOTES.md`.
+
+### v2.8.3 — 2026-09-05
+
+> PCAP merge enhancements, six new protocol decoders (SSDP UPnP, gRPC,
+> DHCPv6, mDNS, LLMNR, EPMAP), improved plain-text decoder, and
+> gRPC stream reassembly fix.
+
+- **Features**
+  - **Six new protocol decoders — SSDP UPnP, gRPC, DHCPv6, mDNS, LLMNR,
+    EPMAP (Conv → Decodes + sidebar)** — extends protocol coverage with
+    SSDP (Simple Service Discovery Protocol / UPnP), gRPC (Google RPC over
+    HTTP2), DHCPv6, mDNS (multicast DNS), LLMNR (Link-Local Multicast
+    Name Resolution), and EPMAP (DCE/RPC Endpoint Mapper). All are
+    registered in `SUPPORTED_DECODER_PROTOS` and auto-detected via
+    `PROTOCOL_DECODER_HINTS` / `PORT_DECODER_HINTS`.
+  - **gRPC stream reassembly fix** — fixed a bug in the gRPC decoder
+    where stream fragments were not being correctly reassembled,
+    causing partial or corrupted output for multi-frame gRPC calls.
+    The decoder now properly buffers and reassembles streaming RPC
+    responses.
+  - **Plain-text decoder improvements** — the generic plain-text decoder
+    was enhanced with better boundary detection and charset handling
+    for more reliable text extraction from raw streams.
+  - **PCAP merge detail buckets** — the Stats → PCAP Comparison subtab
+    now shows per-bucket detail (packet counts, byte totals, timing
+    distribution) rather than just aggregate stats.
+  - **Shannon entropy color-coding improvements** — finer color gradation
+    for better differentiation of low/medium/high entropy regions,
+    and the entropy symbol was corrected for consistency.
+  - **Multi-source bookmarking and targeting fix** — fixed bookmark
+    creation and target resolution when a session has multiple
+    capture sources.
+  - **Better merge support** — various improvements to the PCAP merge
+    workflow including better handling of overlapping time ranges and
+    deduplication of duplicate packets across sources.
+- **Fixes**
+  - **gRPC stream reassembly** — see Features above.
+
+### v2.8.2 — 2026-09-05
+
+> Multi-source correlation: compare hosts and ports across captures,
+> per-source packet color coding with blending, multi-source timeline
+> alignment, session picker caching, and filtered packet export to pcap.
+
+- **Features**
+  - **Multi-source capture comparison** — Stats → PCAP Comparison
+    now compares hosts and ports across two or more capture sources,
+    surfacing new / missing / changed entries per category.
+  - **Per-source packet color coding with blending** — the packet list
+    and collapsed views color-code packets by their capture source;
+    packets from multiple sources use blended colors for overlap.
+  - **Multi-source timeline snapping** — multiple capture sources are
+    snapped to a unified timeline for correlated analysis.
+  - **Session picker caching** — the session picker caches the last
+    known state and updates in the background on startup for faster
+    initial load.
+  - **Filtered packet export to pcap** — right-click `Filtered
+    packets (.pcap)` writes only the currently displayed
+    (filter-matched) packets to a new pcap file, powered by
+    `capture-store-export-filtered-pcap` in the backend IPC handler.
 
 ### v2.8.0 — 2026-09-04
 
@@ -1480,17 +1551,10 @@ Already shipped (so we don't redo them):
   - New Kerberos 5 (`krb5`) Conv decoder (AS-REQ/REP, TGS-REQ/REP,
     AP-REQ/REP, KRB-ERROR, KRB-PRIV, KRB-CRED).
   - New Conv Decodes dropdown entries + stream decoders for **DNS,
-    SNMP, DHCP, DHCPv6** (auto-detect + protocol/port hints;
+    SNMP, DHCP** (auto-detect + protocol/port hints;
     RR/option/TLV walks with typed rdata preview).
-  - Conv Decodes entries for **EPMAP, LLMNR, NBNS, NBDGM (NetBIOS
-    Datagram Service)**, plus upgraded LDAP (search/filters/entries,
-    typed attribute tree).
-  - **Crypt → Wifi subtab** with 802.11 / RadioTap decoding, WPA2
-    4-way handshake PTK derivation (PBKDF2-HMAC-SHA1 PMK → PRF-384
-    PTK per IEEE 802.11i §8.5.1), AES-CCMP / TKIP / WEP decryption,
-    SSID/BSSID filter, "decryptable with my keys" filter, keystore-
-    backed `wifi-wep` / `wifi-wpa-psk` / `wifi-pmk` keys, and
-    auto-rerun after `setBackendWifiKeys`.
+  - Conv Decodes entries for **NBNS, NBDGM (NetBIOS Datagram Service)**,
+    plus upgraded LDAP (search/filters/entries, typed attribute tree).
   - **Stats → Anomalies sub-tab**: portscan, brute-force login bursts
     (FTP/SSH/Telnet/SMTP/POP3/IMAP/RDP/VNC/LDAP), baseline packet-
     length / per-minute outliers, high-entropy cleartext payloads —
@@ -1511,10 +1575,6 @@ Already shipped (so we don't redo them):
     and hands it to Electron's `webContents.printToPDF` (no
     third-party PDF dependency); the Summary header **Save as PDF**
     button calls the same path.
-  - Wifi keys round-trip through sessions — saved sessions carry
-    802.11 keys, and on restore the bridge re-sends them to the
-    backend so re-opening a wifi capture still decrypts without
-    manual re-entry.
   - Notes tab now auto-feeds the Summary tab under "Inferred Data
     (from Notes)"; per-note "Mark as verified" toggle moves the note
     to "Verified Notes (from Notes)".
