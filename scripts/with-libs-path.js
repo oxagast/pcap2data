@@ -113,7 +113,7 @@ function spawnChild() {
     }
     const [command, ...commandArgs] = args;
     const env = buildChildEnv();
-    const result = require("child_process").spawnSync(command, commandArgs, {
+    const result = require("child_process").spawnSync("uv", ["run", command, ...commandArgs], {
         stdio: "inherit",
         env,
     });

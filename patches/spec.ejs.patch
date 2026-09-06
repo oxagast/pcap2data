@@ -3,24 +3,23 @@
 #
 # The ``electron-installer-redhat`` staging layout places the packaged app
 # at ``<stagingDir>/BUILD/usr/<app>/`` (because ``baseAppDir = 'BUILD/usr'``).
-# During ``%install`` rpmbuild's CWD is ``<stagingDir>/BUILD/``, so
-# ``cp usr/*`` (no prefix) correctly resolves to
-# ``<stagingDir>/BUILD/usr/*`` — the original unpatched line is correct.
+# rpmbuild's %install runs with CWD = ``<stagingDir>/BUILD/<name>-build/BUILDROOT/``.
+# From there, ``../usr/*`` resolves to ``<stagingDir>/BUILD/usr/*`` — the correct path.
 #
-# This patch reverts a mistaken earlier patch that changed ``usr/*`` to
-# ``../usr/*``, which resolves to ``<stagingDir>/usr/*`` (wrong directory).
+# The unpatched template uses ``cp usr/* ...`` which from BUILDROOT resolves to
+# ``BUILDROOT/usr/*`` (doesn't exist), causing the build to fail.
 #
 # This patch is idempotent: the applier (``scripts/apply-patches.js``)
-# detects when ``spec.ejs`` already contains ``usr/*`` and skips
+# detects when ``spec.ejs`` already contains ``../usr/*`` and skips
 # re-application.
 --- node_modules/electron-installer-redhat/resources/spec.ejs
 +++ spec.ejs
 @@ -24,7 +24,7 @@
- 
+
  %>%install
  mkdir -p %{buildroot}/usr/
--cp <%= process.platform === 'darwin' ? '-R' : '-r' %> ../usr/* %{buildroot}/usr/
-+cp <%= process.platform === 'darwin' ? '-R' : '-r' %> usr/* %{buildroot}/usr/
- 
- 
+-cp <%= process.platform === 'darwin' ? '-R' : '-r' %> usr/* %{buildroot}/usr/
++cp <%= process.platform === 'darwin' ? '-R' : '-r' %> ../usr/* %{buildroot}/usr/
+
+
  %files

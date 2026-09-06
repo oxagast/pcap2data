@@ -1,0 +1,39 @@
+[project]
+name = "snitch"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Marshall Whittaker", email = "marshall@oxasploits.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "beautifulsoup4==4.14.3",
+    "chardet==7.4.3",
+    "cryptography==49.0.0",
+    "geoip2==2.9.0",
+    "libmagic==1.0 ; sys_platform != 'win32'",
+    "numpy==2.4.2",
+    "pyinstaller==6.21.0",
+    "python-magic==0.4.27 ; sys_platform != 'win32'",
+    "python-magic-bin==0.4.14 ; sys_platform == 'win32'",
+    "pyyaml==6.0.3",
+    "requests==2.32.5",
+    "scapy==2.5.0",
+    "scipy==1.17.1",
+    "setuptools==68.1.2",
+    "staticx==0.14.2 ; sys_platform == 'linux'",
+    "typing-extensions==4.15.0",
+]
+
+[project.scripts]
+snitch = "snitch:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.21.0",
+]
