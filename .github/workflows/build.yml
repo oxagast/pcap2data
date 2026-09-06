@@ -25,6 +25,11 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: Set up uv
+        uses: oxasploits/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Setup Python
         uses: oxasploits/setup-python@v5
         with:
@@ -106,11 +111,6 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Set up uv
-        uses: oxasploits/setup-uv@v5
-        with:
-          enable-cache: true
-
       - name: Install Dependencies
         run: npm ci
 
@@ -162,11 +162,6 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-
-      - name: Set up uv
-        uses: oxasploits/setup-uv@v5
-        with:
-          enable-cache: true
 
       - name: Install Dependencies
         run: npm ci
