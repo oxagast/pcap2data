@@ -103,4 +103,6 @@ jobs:
 
       - name: Push changes
         run: |
-          git push
+          git fetch origin main
+          git rebase origin/main
+          git push --force-with-lease origin main
