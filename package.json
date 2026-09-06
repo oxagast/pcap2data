@@ -102,7 +102,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1089.0",
-    "bson": "^7.3.1",
+    "bson": "^7.3.2",
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",
     "crypto-js": "^4.2.0",
