@@ -12,7 +12,7 @@ PyInstaller==6.21.0
 staticx==0.14.2 ; sys_platform == "linux"
 beautifulsoup4==4.14.3
 geoip2==2.9.0
-numpy==2.4.2
+numpy==2.5.2
 PyYAML==6.0.3
 Requests==2.32.5
 scapy==2.5.0
