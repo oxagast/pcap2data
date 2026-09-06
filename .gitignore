@@ -8,6 +8,7 @@ build/
 dist/
 .webpack/
 scripts/__pycache__/
+src/backend/decoders/__pycache__/
 
 # PyInstaller backend binaries (also in src/backend/)
 src/backend/snitch
@@ -21,6 +22,8 @@ backend/snitch-extract.exe
 
 # PyInstaller spec files (generated at build time)
 *.spec
+*.pyc
+
 
 # Webpack bundle output
 src/PacketSnitch-Pro/
