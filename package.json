@@ -122,7 +122,7 @@
     "setimmediate": "^1.0.5",
     "stream-browserify": "^3.0.0",
     "tar": "^6.2.1",
-    "undici": "^6.27.0",
+    "undici": "^8.10.1",
     "unzipper": "^0.12.5",
     "vm-browserify": "^1.1.2",
     "whirlpool-js": "^1.0.0"
