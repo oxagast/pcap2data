@@ -14,7 +14,7 @@ beautifulsoup4==4.14.3
 geoip2==2.9.0
 numpy==2.4.2
 PyYAML==6.0.3
-Requests==2.32.5
+Requests==2.34.2
 scapy==2.5.0
 scipy==1.17.1
 setuptools==68.1.2
