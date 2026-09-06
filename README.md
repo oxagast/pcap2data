@@ -79,6 +79,23 @@ PacketSnitch is a network analysis platform that transforms packet captures into
 
 ## Quick Start
 
+### Compile
+
+This is *only necessary* if you like getting your hands dirty.  If you want to skip all this, just download one.  But for the *nerds* out there...
+
+```
+git clone git@github.com:oxagast/PacketSnitch.git
+cd PacketSnitch
+npm run patch-rpm-build                 # redhat/fedora
+npm run make
+cd out/make/rpm/x64                     # redhat/fedora
+cd out/make/deb/x64                     # debian/kali/ubuntu
+sudo dnf install ./packetsnitch-*.rpm   # redhat/fedora
+sudo dpkg -i ./packetsnitch-*deb        # debian/kali/ubuntu
+packetsnitch-installer.exe              # windows (UAC for install)
+packetsnitch
+```
+
 ### Installation
 
 Download a pre-built release from the [releases](https://github.com/oxasploits/PacketSnitch/releases) page:
