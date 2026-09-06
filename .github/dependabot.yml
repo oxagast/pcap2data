@@ -1,0 +1,46 @@
+# .github/dependabot.yml
+version: 2
+updates:
+  # Node.js / npm packages (Electron renderer + webpack build tooling)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-request-limit: 10
+    labels:
+      - dependencies
+      - node
+    commit-message:
+      prefix: "deps(npm)"
+
+  # Python packages — snitch.py backend
+  - package-ecosystem: pip
+    directory: /src/backend
+    manifest: /src/backend/requirements.txt
+    schedule:
+      interval: weekly
+    open-pull-request-limit: 10
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: "deps(pip)"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # Python packages — snitch-extract.py backend
+  - package-ecosystem: pip
+    directory: /src/backend
+    manifest: /src/backend/requirements-extract.txt
+    schedule:
+      interval: weekly
+    open-pull-request-limit: 10
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: "deps(pip)"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
