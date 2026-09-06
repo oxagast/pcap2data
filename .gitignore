@@ -1,22 +1,149 @@
-node_modules
-build
-dist
-out
-.npmrc
-src/PacketSnitch-Pro
-docs/PacketSnitch-Website
+# ============================================================
+# Build outputs — recreated on every build
+# ============================================================
+
+# Electron / electron-forge output
+out/
+build/
+dist/
+.webpack/
+
+# PyInstaller backend binaries (also in src/backend/)
 src/backend/snitch
 src/backend/snitch.exe
 src/backend/snitch-extract
 src/backend/snitch-extract.exe
-src/metrics/var
+backend/snitch
 backend/snitch.exe
+backend/snitch-extract
 backend/snitch-extract.exe
-snitch
-snitch-extract
-testcases
+
+# PyInstaller spec files (generated at build time)
+*.spec
+
+# Webpack bundle output
+src/PacketSnitch-Pro/
+
+# Metrics var dir
+src/metrics/var
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+eggs/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+venv/
+ENV/
+env/
+.pytest_cache/
+.nox/
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# Node
+# ============================================================
+node_modules/
+.npm
+.npmrc
+.eslintcache
+.yarn-integrity
+.jspm_packages/
+jspm_packages/
+
+# JS coverage
+lib-cov/
+coverage/
+*.lcov
+.nyc_output/
+
+# Parcel / next / nuxt / vuepress caches
+.cache/
+.next/
+.nuxt/
+.vuepress/
+
+# Vite / FuseBox / webpack cache
+.vite/
+.fusebox/
+.serverless/
+.dynamodb/
+
+# Lerna / yarn
+lerna-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============================================================
+# Logs & diagnostics
+# ============================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .VSCodeCounter
-memories
+
+# ============================================================
+# Keys & secrets
+# ============================================================
+*.key
+*.privkey
+*.pem
+.env
+.env.test
+
+# ============================================================
+# Runtime / OS noise
+# ============================================================
+.DS_Store
+Thumbs.db
+pids
+*.pid
+*.seed
+*.pid.lock
+.vscode/
+
+# Optional REPL history
+.node_repl_history
+
+# Optional npm cache
+.npm
+
+# TypeScript cache
+*.tsbuildinfo
+typings/
+
+# Output of 'npm pack'
+*.tgz
+
+# Test corpora & temp files
+testcases/
+.nox/
+src/backend/build/
+src/backend/*.spec
+src/backend/dist/
+scripts/__pycache__/
+scripts/*.pyc
+
+# Submodules (not generated, but don't track内部)
+docs/PacketSnitch-Website
+memories/
 
 # Keys
 *.key
