@@ -172,8 +172,11 @@ jobs:
 
       # Apply all patches (spec.ejs fixes the ../usr/* path for rpmbuild;
       # staticx-api.py enables the staticx Python C-extension workaround)
-      - name: Apply Patches
+      - name: Apply Patch to Staticx
         run: npm run patch:staticx
+
+      - name: Apply Patch to Specfile
+        run: npm run patch:spec
 
       # Compile Python backend → PyInstaller onefile binary
       - name: Build Backend
