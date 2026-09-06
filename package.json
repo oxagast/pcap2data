@@ -10,7 +10,7 @@
   "scripts": {
     "start": "electron-forge start -- --ozone-platform=x11",
     "package": "npm run build:backend && npm run build:extractor && electron-forge package",
-    "build:deps": "uv pip install -r src/backend/requirements.txt --python .venv/bin/python3 && npm install",
+    "build:deps": "command -v uv > /dev/null 2>&1 && uv pip install -r src/backend/requirements.txt --python .venv/bin/python3 && npm install || pip3 install -r src/backend/requirements.txt --break-system-packages && npm install",
     "patch": "node scripts/apply-patches.js",
     "patch:spec": "node scripts/apply-patches.js patches/spec.ejs.patch",
     "patch:staticx": "node scripts/apply-patches.js patches/staticx-api.py.patch",
