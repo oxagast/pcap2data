@@ -15,6 +15,7 @@
   <a href="https://github.com/oxasploits/PacketSnitch/releases">
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue" alt="Platform">
   </a>
+  <a href='https://github.com/MShawon/github-clone-count-badge'><img alt='GitHub Clones' src='https://img.shields.io/badge/dynamic/json?color=success&label=Clone&query=count&url=https://gist.githubusercontent.com/oxagast/d5fe94fe6cfbdc41be9d590f51411020/raw/clone.json&logo=github'></a>
 </p>
 
 ---
