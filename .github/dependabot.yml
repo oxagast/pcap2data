@@ -13,26 +13,10 @@ updates:
     commit-message:
       prefix: "deps(npm)"
 
-  # Python packages — snitch.py backend
+  # Python packages — both requirements.txt and requirements-extract.txt
+  # Dependabot will open separate PRs per manifest automatically
   - package-ecosystem: pip
     directory: /src/backend
-    manifest: /src/backend/requirements.txt
-    schedule:
-      interval: weekly
-    open-pull-request-limit: 10
-    labels:
-      - dependencies
-      - python
-    commit-message:
-      prefix: "deps(pip)"
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
-
-  # Python packages — snitch-extract.py backend
-  - package-ecosystem: pip
-    directory: /src/backend
-    manifest: /src/backend/requirements-extract.txt
     schedule:
       interval: weekly
     open-pull-request-limit: 10
