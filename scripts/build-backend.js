@@ -202,8 +202,8 @@ function removeExistingBinary(exeName) {
 }
 
 function invokePyInstaller(args) {
-    console.log(`[build-backend] running: python3 ${args.join(" ")}`);
-    const result = spawnSync("python3", args, {
+    console.log(`[build-backend] running: uv run python3 ${args.join(" ")}`);
+    const result = spawnSync("uv", ["run", "python3", ...args], {
         cwd: PROJECT_ROOT,
         stdio: "inherit",
         env: process.env,
@@ -243,8 +243,8 @@ function stagePatchedSos(target) {
         "--cache-dir",
         cacheDir,
     ];
-    console.log(`[build-backend] staging non-writable patched .so files: python3 ${args.join(" ")}`);
-    const result = spawnSync("python3", args, {
+    console.log(`[build-backend] staging non-writable patched .so files: uv run python3 ${args.join(" ")}`);
+    const result = spawnSync("uv", ["run", "python3", ...args], {
         cwd: PROJECT_ROOT,
         stdio: "inherit",
         env: process.env,

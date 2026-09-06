@@ -10,8 +10,9 @@
   "scripts": {
     "start": "electron-forge start -- --ozone-platform=x11",
     "package": "npm run build:backend && npm run build:extractor && electron-forge package",
-    "build:deps": "pip3 install -r src/backend/requirements.txt --break-system-packages && npm install",
+    "build:deps": "uv pip install -r src/backend/requirements.txt --python .venv/bin/python3 && npm install",
     "patch": "node scripts/apply-patches.js",
+    "patch:spec": "node scripts/apply-patches.js patches/spec.ejs.patch",
     "patch:staticx": "node scripts/apply-patches.js patches/staticx-api.py.patch",
     "make": "npm run build:deps && npm run patch && npm run build:backend && npm run build:extractor && npm run build:frontend",
     "build:frontend": "cross-env NODE_ENV=production QA_SKIP_RPATHS=1 electron-forge make",
@@ -28,7 +29,7 @@
     "install:metrics-server": "bash scripts/install-metrics.sh",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish",
     "test": "npm run tests",
-    "test:backend": "node scripts/with-libs-path.js pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1",
+    "test:backend": "uv run pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1",
     "test:frontend": "jest --runInBand",
     "tests": "npm run test:backend && npm run test:frontend"
   },
