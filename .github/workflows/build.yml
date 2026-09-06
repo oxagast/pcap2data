@@ -26,7 +26,7 @@ jobs:
           cache: 'npm'
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: oxasploits/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -178,7 +178,7 @@ jobs:
       # Apply all patches (spec.ejs fixes the ../usr/* path for rpmbuild;
       # staticx-api.py enables the staticx Python C-extension workaround)
       - name: Apply Patches
-        run: npm run patch
+        run: npm run patch:staticx
 
       # Compile Python backend → PyInstaller onefile binary
       - name: Build Backend
