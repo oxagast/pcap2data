@@ -30,7 +30,7 @@
     "install:metrics-server": "bash scripts/install-metrics.sh",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish",
     "test": "npm run tests",
-    "test:backend": "uv run pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1",
+    "test:backend": "if command -v uv >/dev/null 2>&1; then uv run pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1; else python3 -m pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1; fi",
     "test:frontend": "jest --runInBand",
     "tests": "npm run test:backend && npm run test:frontend"
   },
