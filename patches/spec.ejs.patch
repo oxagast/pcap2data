@@ -2,29 +2,25 @@
 # target: spec.ejs
 #
 # The ``electron-installer-redhat`` staging layout has changed across
-# releases. Some versions copy files into ``<stagingDir>/BUILD/usr``
-# (so ``usr`` is the right relative path when rpmbuild runs inside
-# ``BUILD/``), while older ones left files next to ``BUILD/`` and
-# required ``../usr``. This patch makes the %install block resilient by
-# probing both locations before copying.
+# releases. Some versions stage the built app under ``BUILD/usr`` and
+# require ``../usr`` when rpmbuild executes inside ``BUILD/``. Others
+# stage directly under ``usr`` so the original copy command works.
+# Guard the copy to support both layouts.
 #
 # This patch is idempotent: ``scripts/apply-patches.js`` detects when
 # the conditional block is already present and skips re-application.
 --- node_modules/electron-installer-redhat/resources/spec.ejs
 +++ spec.ejs
-@@ -24,7 +24,13 @@
-
+@@ -25,7 +25,15 @@ %>%install
  %>%install
  mkdir -p %{buildroot}/usr/
--cp <%= process.platform === 'darwin' ? '-R' : '-r' %> ../usr/* %{buildroot}/usr/
+-cp <%= process.platform === 'darwin' ? '-R' : '-r' %> usr/* %{buildroot}/usr/
 +if [ -d ../usr ]; then
 +  cp <%= process.platform === 'darwin' ? '-R' : '-r' %> ../usr/* %{buildroot}/usr/
 +elif [ -d usr ]; then
 +  cp <%= process.platform === 'darwin' ? '-R' : '-r' %> usr/* %{buildroot}/usr/
 +else
 +  echo "electron-installer-redhat: no staged usr directory found" >&2
++  echo "Expected either ../usr (BUILD/usr) or usr (top-level)" >&2
 +  exit 1
 +fi
-
-
- %files
