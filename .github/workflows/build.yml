@@ -29,7 +29,7 @@ jobs:
         run: npm ci
 
       - name: Install ESLint
-        run: npm install --save-dev eslint
+        run: npm install --save-dev eslint@9
 
       - name: Install Python Dependencies
         run: npm run build:deps

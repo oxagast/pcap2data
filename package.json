@@ -95,6 +95,7 @@
     "css-loader": "^6.11.0",
     "electron": "^40.6.1",
     "electron-icon-maker": "^0.0.5",
+    "eslint": "^9.39.5",
     "globals": "^17.5.0",
     "jest": "^30.4.2",
     "jsdom": "^29.1.1",
