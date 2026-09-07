@@ -9,7 +9,8 @@ dist/
 .webpack/
 scripts/__pycache__/
 src/backend/decoders/__pycache__/
-
+.snitch.pyinstaller
+.snitch-extract.pyinstaller
 # PyInstaller backend binaries (also in src/backend/)
 src/backend/snitch
 src/backend/snitch.exe
