@@ -1,25 +1,30 @@
 # cwd: node_modules/electron-installer-redhat/resources
 # target: spec.ejs
 #
-# The ``electron-installer-redhat`` staging layout places the packaged app
-# at ``<stagingDir>/BUILD/usr/<app>/`` (because ``baseAppDir = 'BUILD/usr'``).
-# rpmbuild's %install runs with CWD = ``<stagingDir>/BUILD/<name>-build/BUILDROOT/``.
-# From there, ``../usr/*`` resolves to ``<stagingDir>/BUILD/usr/*`` — the correct path.
+# The ``electron-installer-redhat`` staging layout has changed across
+# releases. Some versions copy files into ``<stagingDir>/BUILD/usr``
+# (so ``usr`` is the right relative path when rpmbuild runs inside
+# ``BUILD/``), while older ones left files next to ``BUILD/`` and
+# required ``../usr``. This patch makes the %install block resilient by
+# probing both locations before copying.
 #
-# The unpatched template uses ``cp usr/* ...`` which from BUILDROOT resolves to
-# ``BUILDROOT/usr/*`` (doesn't exist), causing the build to fail.
-#
-# This patch is idempotent: the applier (``scripts/apply-patches.js``)
-# detects when ``spec.ejs`` already contains ``../usr/*`` and skips
-# re-application.
+# This patch is idempotent: ``scripts/apply-patches.js`` detects when
+# the conditional block is already present and skips re-application.
 --- node_modules/electron-installer-redhat/resources/spec.ejs
 +++ spec.ejs
-@@ -24,7 +24,7 @@
+@@ -24,7 +24,13 @@
 
  %>%install
  mkdir -p %{buildroot}/usr/
--cp <%= process.platform === 'darwin' ? '-R' : '-r' %> usr/* %{buildroot}/usr/
-+cp <%= process.platform === 'darwin' ? '-R' : '-r' %> ../usr/* %{buildroot}/usr/
+-cp <%= process.platform === 'darwin' ? '-R' : '-r' %> ../usr/* %{buildroot}/usr/
++if [ -d ../usr ]; then
++  cp <%= process.platform === 'darwin' ? '-R' : '-r' %> ../usr/* %{buildroot}/usr/
++elif [ -d usr ]; then
++  cp <%= process.platform === 'darwin' ? '-R' : '-r' %> usr/* %{buildroot}/usr/
++else
++  echo "electron-installer-redhat: no staged usr directory found" >&2
++  exit 1
++fi
 
 
  %files
