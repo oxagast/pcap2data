@@ -14,11 +14,23 @@ const gunzipAsync = promisify(zlib.gunzip);
 const systemTempDir = os.tmpdir();
 const testcaseOutputDir = path.join(systemTempDir, "testcases");
 let BSON = null;
-try { BSON = require("bson"); } catch { }
-let entries = [];
+try {
+  BSON = require("bson");
+} catch {
+  BSON = null;
+}
+const entries = [];
 
 const DEFAULT_HOST_CHUNK_SIZE = 250;
-const VALID_HOST_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000]);
+const VALID_HOST_CHUNK_SIZES = Object.freeze(new Set([25, 100, 250, 500, 2000]));
+
+function normalizeHostChunkSize(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && VALID_HOST_CHUNK_SIZES.has(numeric)) {
+    return numeric;
+  }
+  return DEFAULT_HOST_CHUNK_SIZE;
+}
 const DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS = 800;
 const DEFAULT_HTTP_PROGRESS_LOG_MIN_INTERVAL_MS = 0;
 const JSON_DATA_EMIT_MIN_PACKET_DELTA = 2000;
@@ -215,6 +227,7 @@ function buildBackendProcessEnv() {
 }
 
 async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload = null) {
+  const collectOnly = Boolean(extraPayload?.collectOnly);
   const isReady = await probeSnitchHttpBackendReady(
     currentBackendHttpHost,
     currentBackendHttpPort,
@@ -229,6 +242,9 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
   }
 
   return new Promise((resolve) => {
+    const finish = (result) => {
+      resolve(result);
+    };
     const body = JSON.stringify(extraPayload && typeof extraPayload === "object"
       ? { action, ...extraPayload }
       : { action });
@@ -250,13 +266,17 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
           const processedPackets = Number(event?.processedPackets) || 0;
           const totalPackets = Number(event?.totalPackets) || 0;
           const complete = Boolean(event?.complete);
+          const captureChunkSize = normalizeHostChunkSize(event?.chunkSize);
+          if (collectOnly) {
+            return;
+          }
           if (event?.captureData && typeof event.captureData === "object") {
             sendJsonDataPayload({
               captureData: event.captureData,
               processedPackets,
               totalPackets,
               complete,
-              chunkSize: DEFAULT_HOST_CHUNK_SIZE,
+              chunkSize: captureChunkSize,
               label: typeof event?.path === "string" ? event.path : "in-memory-snapshot",
             });
             return;
@@ -267,7 +287,7 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
               processedPackets,
               totalPackets,
               complete,
-              chunkSize: DEFAULT_HOST_CHUNK_SIZE,
+              chunkSize: captureChunkSize,
             });
             return;
           }
@@ -319,6 +339,8 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
 
             if (message?.type === "complete") {
               sawComplete = true;
+
+              const chunkSize = normalizeHostChunkSize(message?.chunkSize);
               const finalCaptureData =
                 message?.captureData && typeof message.captureData === "object"
                   ? message.captureData
@@ -329,7 +351,7 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
                   processedPackets: Number(message?.processedPackets) || 0,
                   totalPackets: Number(message?.totalPackets) || 0,
                   complete: true,
-                  chunkSize: hostChunkSize,
+                  chunkSize,
                   label: typeof message?.path === "string" ? message.path : "in-memory-snapshot",
                 });
               } else if (latestProgressPath && !collectOnly) {
@@ -338,7 +360,7 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
                   processedPackets: Number(message?.processedPackets) || 0,
                   totalPackets: Number(message?.totalPackets) || 0,
                   complete: true,
-                  chunkSize: hostChunkSize,
+                  chunkSize,
                 });
               }
               finalResult = {
@@ -388,7 +410,7 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
           } catch (_err) {
             parsed = {};
           }
-          resolve({
+          finish({
             success: res.statusCode === 200 && parsed?.success !== false,
             ...parsed,
           });
@@ -400,7 +422,7 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
       req.destroy(new Error("HTTP backend control request timed out"));
     });
     req.on("error", (error) => {
-      resolve({
+      finish({
         success: false,
         error: error?.message || "HTTP backend control request failed",
       });
@@ -689,7 +711,7 @@ async function reclaimExistingBackendService(options = {}) {
       for (const pid of listeningPids) {
         const prior = killResults.find((entry) => entry.pid === pid);
         if (prior && (prior.killed || prior.reason === "already-gone")) continue;
-        // eslint-disable-next-line no-await-in-loop
+
         const escalated = await forceKillProcessById(pid);
         killResults.push({ pid, ...escalated, escalated: true });
       }
@@ -795,7 +817,7 @@ async function reclaimExistingBackendService(options = {}) {
       for (const pid of listeningPids) {
         const prior = killResults.find((entry) => entry.pid === pid);
         if (prior && (prior.killed || prior.reason === "already-gone")) continue;
-        // eslint-disable-next-line no-await-in-loop
+
         const escalated = await forceKillProcessById(pid);
         killResults.push({ pid, ...escalated, escalated: true });
       }
@@ -1679,8 +1701,9 @@ async function ensureBackendHttpServerReady() {
 
       global.logBackend("", text);
       if (text.includes("[BridgeServer] Listening")) {
-        void probeSnitchHttpBackendReady(currentBackendHttpHost, currentBackendHttpPort)
-          .then((ready) => finish(ready));
+        probeSnitchHttpBackendReady(currentBackendHttpHost, currentBackendHttpPort)
+          .then((ready) => finish(ready))
+          .catch(() => finish(false));
       }
     };
 
@@ -1759,6 +1782,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     wifiKeys = null,
     collectOnly = false,
   } = options;
+  const normalizedChunkSize = normalizeHostChunkSize(hostChunkSize);
   const normalizedJobId = normalizeBackendJobId(jobId) || createBackendJobId("http");
 
   const ready = await ensureBackendHttpServerReady();
@@ -1790,7 +1814,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
           processedPackets,
           totalPackets,
           complete,
-          chunkSize: hostChunkSize,
+          chunkSize: normalizedChunkSize,
           label: typeof event?.path === "string" ? event.path : "in-memory-snapshot",
         });
         return;
@@ -1807,7 +1831,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
           processedPackets,
           totalPackets,
           complete,
-          chunkSize: hostChunkSize,
+          chunkSize: normalizedChunkSize,
         });
         return;
       }
@@ -1833,7 +1857,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     const requestPayload = {
       jobId: normalizedJobId,
       pcapPath: filename,
-      hostChunkSize,
+      hostChunkSize: normalizedChunkSize,
       workerThreads,
       emitJsonSnapshots: Boolean(useHttpDataSnapshots),
       verbose: 1,
@@ -1923,7 +1947,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                   processedPackets: Number(message?.processedPackets) || 0,
                   totalPackets: Number(message?.totalPackets) || 0,
                   complete: true,
-                  chunkSize: hostChunkSize,
+                  chunkSize: normalizedChunkSize,
                   label: typeof message?.path === "string" ? message.path : "in-memory-snapshot",
                 });
               } else if (latestProgressPath) {
@@ -1933,7 +1957,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                   processedPackets: Number(message?.processedPackets) || 0,
                   totalPackets: Number(message?.totalPackets) || 0,
                   complete: true,
-                  chunkSize: hostChunkSize,
+                  chunkSize: normalizedChunkSize,
                 });
               }
               finalResult = {
@@ -2050,13 +2074,6 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     req.write(body);
     req.end();
   });
-}
-
-function normalizeHostChunkSize(rawValue) {
-  const parsed = Number(rawValue);
-  if (!Number.isFinite(parsed)) return DEFAULT_HOST_CHUNK_SIZE;
-  const whole = Math.trunc(parsed);
-  return VALID_HOST_CHUNK_SIZES.has(whole) ? whole : DEFAULT_HOST_CHUNK_SIZE;
 }
 
 function removePacketsChunkFromFS(jsonPath) {
@@ -2529,7 +2546,11 @@ async function runBackendCommandInternal(filename, options = {}) {
               decompressedBuffer = await gunzipAsync(compressedBuffer);
             } else {
               let lzmaNative = null;
-              try { lzmaNative = require("lzma-native"); } catch { }
+              try {
+                lzmaNative = require("lzma-native");
+              } catch (error) {
+                global.logBackend?.("[Bridge] Failed to require lzma-native", error?.message || error);
+              }
               if (!lzmaNative) {
                 sendError("[Bridge] Cannot load xz-compressed session (.pss / .json.xz) without lzma-native support!");
                 return {

@@ -44,7 +44,7 @@ function makePacket({
   dstPort = 80,
   length = 200,
   flags = null,
-  timestamp = 1_700_000_000_000,
+  timestamp = 1700000000000,
   dnsName = null,
   httpUri = null,
   httpAuth = null,
@@ -61,15 +61,15 @@ function makePacket({
     ...(isUdp
       ? { UDP: { "udp.srcport": srcPort, "udp.dstport": dstPort } }
       : {
-          TCP: {
-            "tcp.src.port": srcPort,
-            "tcp.dst.port": dstPort,
-            ...(flags ? { "tcp.flags": flags } : {}),
-            ...(decodedSection && typeof decodedSection === "object"
-              ? { [decodedSection.name]: decodedSection.payload || {} }
-              : {}),
-          },
-        }),
+        TCP: {
+          "tcp.src.port": srcPort,
+          "tcp.dst.port": dstPort,
+          ...(flags ? { "tcp.flags": flags } : {}),
+          ...(decodedSection && typeof decodedSection === "object"
+            ? { [decodedSection.name]: decodedSection.payload || {} }
+            : {}),
+        },
+      }),
   };
   if (Number.isFinite(length)) pi["packet.len"] = length;
   if (Number.isFinite(timestamp)) pi["packet.timestamp"] = timestamp;
@@ -167,7 +167,7 @@ describe("Session Threat Score folds in Stats anomalies", () => {
 
   test("brute-force login findings raise the threat score into the High or Critical band", () => {
     const packets = [];
-    const baseMs = 1_700_000_000_000;
+    const baseMs = 1700000000000;
     for (let i = 0; i < 12; i += 1) {
       packets.push(
         makePacket({
@@ -176,7 +176,7 @@ describe("Session Threat Score folds in Stats anomalies", () => {
           dst: "10.0.0.42",
           srcPort: 51000 + i,
           dstPort: 21,
-          timestamp: baseMs + i * 1_500,
+          timestamp: baseMs + i * 1500,
           // Real wire shape: decoded FTP nested under the TCP section.
           decodedSection: { name: "FTP", payload: { "ftp.request.command": "PASS" } },
         }),
@@ -272,7 +272,7 @@ describe("Session Threat Score folds in Stats anomalies", () => {
     expect(typeof panelCollector).toBe("function");
 
     const packets = [];
-    const baseMs = 1_700_000_000_000;
+    const baseMs = 1700000000000;
     for (let i = 0; i < 10; i += 1) {
       packets.push(
         makePacket({
@@ -281,7 +281,7 @@ describe("Session Threat Score folds in Stats anomalies", () => {
           dst: "10.0.0.42",
           srcPort: 51000 + i,
           dstPort: 21,
-          timestamp: baseMs + i * 1_500,
+          timestamp: baseMs + i * 1500,
           decodedSection: { name: "FTP", payload: { "ftp.request.command": "PASS" } },
         }),
       );
