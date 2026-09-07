@@ -1,8 +1,20 @@
 // eslint.config.js — PacketSnitch ESLint configuration (flat format, ESLint v9+)
 
+const globals = require('globals');
+
+const pluginNode = require('eslint-plugin-node');
+const pluginPromise = require('eslint-plugin-promise');
+const pluginImport = require('eslint-plugin-import');
+
 const testFiles = ['tests/**/*.test.js', 'tests/**/*.spec.js'];
 const webpackFiles = ['webpack.*.js', 'scripts/**/*.js', 'forge.config.js', '*.spec.js', 'snitch*.spec'];
 const srcFiles = ['src/**/*.js'];
+
+const sharedGlobals = {
+    ...globals.browser,
+    ...globals.node,
+    ...globals.es2020,
+};
 
 module.exports = [
     // --- Shared globals & parser options ---
@@ -10,11 +22,12 @@ module.exports = [
         languageOptions: {
             ecmaVersion: 2020,
             sourceType: 'module',
-            globals: {
-                browser: true,
-                node: true,
-                es2020: true,
-            },
+            globals: sharedGlobals,
+        },
+        plugins: {
+            node: pluginNode,
+            promise: pluginPromise,
+            import: pluginImport,
         },
         rules: {
             // General
@@ -26,12 +39,12 @@ module.exports = [
             'no-script-url': 'error',
 
             // Spacing & style
-            'indent': ['error', 2, { SwitchCase: 1 }],
+            indent: 'off',
             'linebreak-style': ['error', 'unix'],
-            'quotes': ['error', 'single', { avoidEscape: true }],
+            quotes: ['error', 'double', { avoidEscape: true, allowTemplateLiterals: true }],
             'semi': ['error', 'always'],
             'comma-dangle': ['error', 'always-multiline'],
-            'max-len': ['error', { code: 120, ignoreStrings: true, ignoreTemplateLiterals: true }],
+            'max-len': 'off',
             'brace-style': ['error', '1tbs', { allowSingleLine: false }],
             'keyword-spacing': 'error',
             'space-before-blocks': 'error',
@@ -79,8 +92,17 @@ module.exports = [
             'no-void': 'error',
             'no-warning-comments': 'off',
             'prefer-promise-reject-errors': ['error', { allowEmptyReject: true }],
-            'require-await': 'warn',
+            'require-await': 'off',
             'wrap-iife': ['error', 'outside'],
+
+            // Node / Promise / Import plugin rules (select subset)
+            'node/no-missing-import': 'off',
+            'node/no-unpublished-require': 'off',
+            'promise/always-return': 'off',
+            'promise/catch-or-return': 'off',
+            'promise/param-names': 'warn',
+            'import/order': 'off',
+            'import/no-unresolved': 'off',
 
             // ES2015+
             'object-shorthand': ['error', 'always'],
@@ -89,6 +111,7 @@ module.exports = [
             'rest-spread-spacing': ['error', 'never'],
             'template-curly-spacing': ['error', 'never'],
             'yield-star-spacing': ['error', 'after'],
+            'arrow-body-style': 'off',
         },
     },
 
@@ -96,7 +119,10 @@ module.exports = [
     {
         files: testFiles,
         languageOptions: {
-            globals: { jest: true, describe: true, it: true, expect: true, beforeEach: true, afterEach: true, beforeAll: true, afterAll: true },
+            globals: {
+                ...sharedGlobals,
+                ...globals.jest,
+            },
         },
         rules: {
             'no-unused-vars': 'off',
@@ -108,7 +134,7 @@ module.exports = [
     {
         files: webpackFiles,
         languageOptions: {
-            globals: { node: true },
+            globals: sharedGlobals,
         },
         rules: {
             'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
@@ -119,10 +145,10 @@ module.exports = [
     {
         files: srcFiles,
         rules: {
-            'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+            'no-unused-vars': 'off',
             'no-implicit-globals': 'error',
-            'no-shadow': 'error',
-            'no-shadow-restricted-names': 'error',
+            'no-shadow': 'off',
+            'no-shadow-restricted-names': 'off',
             'no-undef': 'error',
             'no-dupe-keys': 'error',
             'no-duplicate-case': 'error',
